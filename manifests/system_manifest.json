@@ -1,0 +1,708 @@
+{
+  "version": "3.3.0 (Pro-Phase2)",
+  "generated_at": "2026-02-13",
+  "project_name": "SkyHunter Pro",
+  "description": "Pro 版实际运行状态清单：用户注册/登录 (Email+Password, bcrypt+JWT)、数据隔离、角色系统、航班监控 SaaS + expo-router 前端拆分。",
+  "drift_summary": "Pro 版与 MVP v3.2.0 (Eagle-Auth) 规范存在重大架构偏差。Pro 版采用全新的自建认证体系（bcrypt+JWT）替代 Supabase Auth，数据库表结构完全重新设计（users/monitor_tasks/flight_cache/price_history/password_resets），API 路径前缀从 /api 改为 /api/v1，字段命名体系从 Eagle 的 subscription 体系切换为 monitor 体系。详见各节 drift 标注。",
+
+  "env_contract": {
+    "required": [
+      "DATABASE_URL",
+      "JWT_SECRET_KEY",
+      "USE_MOCK_DATA"
+    ],
+    "optional": [
+      "SERPAPI_API_KEY",
+      "SUPABASE_URL",
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "EMAIL_PROVIDER",
+      "EMAIL_SENDER",
+      "EMAIL_PASSWORD",
+      "SMTP_HOST",
+      "SMTP_PORT",
+      "BREVO_API_KEY",
+      "ADMIN_EMAIL",
+      "CACHE_HOURS",
+      "SCHEDULER_INTERVAL_HOURS",
+      "JWT_EXPIRE_HOURS",
+      "CORS_ALLOWED_ORIGINS"
+    ],
+    "defaults": {
+      "EMAIL_PROVIDER": "smtp",
+      "EMAIL_SENDER": "noreply@skyhunter.app",
+      "SMTP_HOST": "smtp.qq.com",
+      "SMTP_PORT": "465",
+      "CACHE_HOURS": "4",
+      "SCHEDULER_INTERVAL_HOURS": "4",
+      "JWT_EXPIRE_HOURS": "72"
+    },
+    "drift": "warning: MVP 规范要求 DATABASE_URL + SERPAPI_API_KEY 为 required，Pro 版新增 JWT_SECRET_KEY + USE_MOCK_DATA 为 required（启动时强制校验）。SERPAPI_API_KEY 在 Pro 中降级为 optional（Mock 模式下不需要）。MVP 的 AMADEUS_* 系列变量在 Pro 中完全不存在。SMTP_SERVER 改名为 SMTP_HOST，SMTP_PORT 默认值从 587 改为 465。新增 CORS_ALLOWED_ORIGINS（生产环境强制要求）。"
+  },
+
+  "business_constants": {
+    "cabin_map": {
+      "economy": 1,
+      "premium_economy": 2,
+      "business": 3,
+      "first": 4
+    },
+    "cabin_price_multiplier": {
+      "economy": 1.0,
+      "premium_economy": 1.6,
+      "business": 3.2,
+      "first": 5.5
+    },
+    "status_options": ["active", "found", "paused", "expired", "archived"],
+    "search_pricing": {
+      "fixed_day_cost": 1,
+      "range_day_cost": 5,
+      "description": "单日搜索 1 积分，多日热力图 5 积分"
+    },
+    "monitor_pricing": {
+      "formula": "ceil((duration_days * 24 * 60 / interval_minutes) * 0.1)",
+      "minimum_cost": 1,
+      "description": "按时长和频率动态计费，最低 1 积分"
+    },
+    "monitor_frequency_tiers": {
+      "turbo":    { "interval_minutes": 10,   "label": "Turbo",    "emoji": "⚡" },
+      "express":  { "interval_minutes": 30,   "label": "Express",  "emoji": "🚀" },
+      "fast":     { "interval_minutes": 60,   "label": "Fast",     "emoji": "⏩" },
+      "standard": { "interval_minutes": 240,  "label": "Standard", "emoji": "📊" },
+      "eco":      { "interval_minutes": 720,  "label": "Eco",      "emoji": "🌿" },
+      "daily":    { "interval_minutes": 1440, "label": "Daily",    "emoji": "📅" }
+    },
+    "monitor_duration_options": [3, 5, 7, 14, 30],
+    "scheduler_heartbeat_minutes": 5,
+    "user_signup_credits": 5,
+    "flight_engine_settings": {
+      "currency": "USD",
+      "hl": "en",
+      "type_oneway": "2",
+      "type_roundtrip": "1",
+      "travel_class_mapping": {
+        "economy": 1,
+        "premium_economy": 2,
+        "business": 3,
+        "first": 4
+      }
+    },
+    "drift": "warning: MVP 规范使用中文键名 cabin_map（经济舱/商务舱等），Pro 版改为英文键名。MVP 的 strategy_map（best/cheapest）在 Pro 中以 sort_strategy 字段体现但无独立常量。MVP 的 tier_options (Standard/VIP/Agency)、alliance_display、time_window_display 在 Pro 中不存在。Pro 新增 cabin_price_multiplier（Mock 模式价格乘数）和 search_pricing（分级定价）。status_options 从 MVP 的 [active/paused/expired/insufficient_funds] 改为 Pro 的 [active/found/paused/expired]。"
+  },
+
+  "database_schema": {
+    "users": {
+      "table_name": "users",
+      "orm_class": "User",
+      "description": "Pro 版自建用户表（替代 MVP 的 profiles 表）",
+      "fields": {
+        "id": { "type": "int", "primary_key": true, "auto_increment": true },
+        "email": { "type": "str", "unique": true, "index": true, "description": "邮箱（唯一，用于登录）" },
+        "phone": { "type": "str", "unique": true, "nullable": true, "description": "手机号（唯一，可选）" },
+        "hashed_password": { "type": "str", "description": "bcrypt 哈希密码" },
+        "full_name": { "type": "str", "nullable": true, "description": "用户全名" },
+        "role": { "type": "str", "default": "user", "description": "角色: user/admin/agent" },
+        "credits": { "type": "int", "default": 5, "description": "用户积分余额，注册赠送5积分" },
+        "created_at": { "type": "str", "description": "注册时间 ISO 格式字符串" }
+      },
+      "drift": "warning: MVP 规范的 profiles 表使用 UUID 主键、password_hash (Argon2)、tier/plan_type/total_api_calls 字段。Pro 版改为 int 自增主键、hashed_password (bcrypt)、role 字段。MVP 的 tier/plan_type/total_api_calls 在 Pro 中不存在。Pro 新增 phone/full_name 字段。credits 类型从 MVP 的 float 改为 int。"
+    },
+    "monitor_tasks": {
+      "table_name": "monitor_tasks",
+      "orm_class": "MonitorTask",
+      "description": "Pro 版监控任务表（替代 MVP 的 subscriptions 表）",
+      "fields": {
+        "id": { "type": "int", "primary_key": true, "auto_increment": true },
+        "user_id": { "type": "int", "index": true, "nullable": true, "description": "关联用户 ID（数据隔离）" },
+        "origin": { "type": "str", "index": true, "description": "出发地 IATA" },
+        "destination": { "type": "str", "index": true, "description": "目的地 IATA" },
+        "start_date": { "type": "str", "description": "监控起始日期 YYYY-MM-DD" },
+        "days": { "type": "int", "default": 30, "description": "监控天数" },
+        "cabin_class": { "type": "str", "default": "economy" },
+        "adults": { "type": "int", "default": 1 },
+        "children": { "type": "int", "default": 0 },
+        "target_price": { "type": "float", "nullable": true, "description": "目标价格 USD" },
+        "notification_email": { "type": "str", "nullable": true, "description": "通知邮箱" },
+        "status": { "type": "str", "default": "active", "description": "active/found/paused/expired" },
+        "lowest_price": { "type": "float", "nullable": true },
+        "lowest_price_date": { "type": "str", "nullable": true },
+        "current_price": { "type": "float", "nullable": true },
+        "last_checked_at": { "type": "str", "nullable": true, "description": "最后检查时间 ISO" },
+        "created_at": { "type": "str", "description": "创建时间 ISO" },
+        "booking_link": { "type": "str", "nullable": true },
+        "airline": { "type": "str", "nullable": true },
+        "flight_number": { "type": "str", "nullable": true },
+        "max_stops": { "type": "int", "nullable": true },
+        "departure_time_min": { "type": "str", "nullable": true, "description": "最早起飞 HH:MM" },
+        "departure_time_max": { "type": "str", "nullable": true, "description": "最晚起飞 HH:MM" },
+        "sort_strategy": { "type": "str", "default": "best", "description": "best/cheapest" },
+        "trip_type": { "type": "str", "default": "one_way", "description": "one_way/round_trip" },
+        "return_date": { "type": "str", "nullable": true },
+        "arrival_time_min": { "type": "str", "nullable": true },
+        "arrival_time_max": { "type": "str", "nullable": true },
+        "airline_include": { "type": "str", "nullable": true, "description": "偏好航司代码/联盟" },
+        "excluded_airlines": { "type": "str", "nullable": true, "description": "排除航司代码，逗号分隔如 UA,AA" },
+        "click_count": { "type": "int", "default": 0, "description": "预订链接点击次数" },
+        "last_clicked_at": { "type": "str", "nullable": true, "description": "最后点击时间 ISO" },
+        "baggage_info": { "type": "str", "nullable": true },
+        "is_deleted": { "type": "bool", "default": false, "description": "软删除标记" },
+        "interval_minutes": { "type": "int", "default": 240, "description": "检查频率（分钟）: 10/30/60/240/720/1440" },
+        "end_date": { "type": "str", "nullable": true, "description": "监控结束时间 ISO，基于 duration_days 自动计算" },
+        "next_run_time": { "type": "str", "nullable": true, "description": "下次运行时间 ISO" },
+        "total_credits_deducted": { "type": "int", "default": 0, "description": "创建时一次性扣除的总积分" }
+      },
+      "drift": "Phase 2 升级：新增 interval_minutes/end_date/next_run_time/total_credits_deducted 字段，status 枚举扩展为 active/found/paused/expired/archived。调度器从全局轮询改为 5 分钟心跳 per-task 独立调度。"
+    },
+    "flight_cache": {
+      "table_name": "flight_cache",
+      "orm_class": "FlightCache",
+      "description": "航班价格缓存表（SerpApi 查询结果缓存）",
+      "fields": {
+        "id": { "type": "int", "primary_key": true, "auto_increment": true },
+        "origin": { "type": "str", "index": true },
+        "destination": { "type": "str", "index": true },
+        "date": { "type": "str", "description": "航班日期 YYYY-MM-DD" },
+        "price": { "type": "float", "nullable": true },
+        "data": { "type": "str", "nullable": true, "description": "完整航班数据 JSON 字符串" },
+        "updated_at": { "type": "str", "description": "缓存更新时间 ISO" }
+      },
+      "unique_constraint": ["origin", "destination", "date"],
+      "drift": "warning: MVP 的 search_cache 表字段包含 departure_date/return_date/cabin_class/max_stops/adults/children/booking_link/created_at。Pro 的 flight_cache 表简化为 origin/destination/date/price/data/updated_at，通过 data (JSON) 字段存储完整航班信息。唯一约束从多字段组合简化为 (origin, destination, date)。"
+    },
+    "price_history": {
+      "table_name": "price_history",
+      "orm_class": "PriceHistory",
+      "description": "价格历史记录表",
+      "fields": {
+        "id": { "type": "int", "primary_key": true, "auto_increment": true },
+        "monitor_id": { "type": "int", "index": true, "description": "关联监控任务 ID" },
+        "price": { "type": "float" },
+        "checked_at": { "type": "str", "description": "检查时间 ISO" },
+        "booking_link": { "type": "str", "nullable": true }
+      },
+      "drift": "warning: MVP 的 price_history 表外键名为 subscription_id，Pro 改为 monitor_id。MVP 包含 airline_name/flight_number 字段，Pro 版缺失这两个字段。"
+    },
+    "password_resets": {
+      "table_name": "password_resets",
+      "orm_class": "PasswordReset",
+      "description": "Pro 版新增：密码重置验证码表",
+      "fields": {
+        "id": { "type": "int", "primary_key": true, "auto_increment": true },
+        "email": { "type": "str", "index": true },
+        "token": { "type": "str", "index": true, "description": "6位数字验证码" },
+        "expires_at": { "type": "str", "description": "过期时间 ISO" },
+        "used": { "type": "bool", "default": false },
+        "created_at": { "type": "str" }
+      },
+      "drift": "info: MVP 规范中不存在此表。Pro 版新增用于自建密码重置流程。"
+    },
+    "transaction_history": {
+      "table_name": "transaction_history",
+      "orm_class": "TransactionHistory",
+      "description": "用户积分交易流水表，记录核心充值、消费、退款与系统调账",
+      "fields": {
+        "id": { "type": "int", "primary_key": true, "auto_increment": true },
+        "user_id": { "type": "int", "index": true, "description": "关联用户 ID" },
+        "transaction_type": { "type": "str", "description": "recharge/consumption/refund/system_adjustment" },
+        "amount": { "type": "int", "description": "积分变动值，扣费为负数，入账为正数" },
+        "credits_before": { "type": "int", "description": "变动前余额" },
+        "credits_after": { "type": "int", "description": "变动后余额" },
+        "reference_type": { "type": "str", "nullable": true, "description": "关联对象类型" },
+        "reference_id": { "type": "str", "nullable": true, "description": "关联对象 ID" },
+        "description": { "type": "str", "nullable": true, "description": "交易说明" },
+        "operator_user_id": { "type": "int", "nullable": true, "description": "操作人 ID（如管理员）" },
+        "created_at": { "type": "str", "description": "创建时间 ISO" }
+      },
+      "drift": "Phase 2C 新增：补齐 MVP 缺失的交易流水审计能力。当前已覆盖注册赠送、topup、搜索扣费、失败退款、监控创建扣费、管理员调账。"
+    },
+    "missing_from_mvp": {
+      "system_settings": "warning: MVP 规范定义的 system_settings 表（用于动态定价的全局配置表）在 Pro 版中不存在。"
+    }
+  },
+
+  "api_registry": {
+    "prefix": "/api/v1",
+    "auth_scheme": "JWT Bearer (bcrypt + python-jose, HS256)",
+    "drift_prefix": "warning: MVP 规范 API 前缀为 /api，Pro 版改为 /api/v1。所有路由路径不兼容。",
+    "endpoints": {
+      "GET /": {
+        "summary": "根路径健康检查",
+        "tags": ["health"],
+        "auth": false,
+        "response": "{ status, service, version, mock_mode }"
+      },
+      "GET /health": {
+        "summary": "详细健康检查",
+        "tags": ["health"],
+        "auth": false,
+        "response": "{ status, service, version, mock_mode, serpapi_configured, brevo_configured, scheduler_running, timestamp }"
+      },
+      "POST /api/v1/auth/signup": {
+        "summary": "用户注册",
+        "request_model": "SignupRequest",
+        "response_model": "TokenResponse",
+        "status_code": 201,
+        "auth": false,
+        "drift": "warning: MVP 规范无 signup 端点（依赖 Supabase Auth）。Pro 版自建注册，注册即返回 JWT Token。"
+      },
+      "POST /api/v1/auth/token": {
+        "summary": "用户登录 (OAuth2 表单格式)",
+        "request_model": "OAuth2PasswordRequestForm",
+        "response_model": "TokenResponse",
+        "auth": false,
+        "drift": "warning: MVP 规范为 POST /api/auth/login 使用 JSON body (LoginRequest)。Pro 版改为 /api/v1/auth/token 使用 OAuth2 标准表单格式 (username=email, password=password)。前端通过 JSON body 调用时需适配。"
+      },
+      "GET /api/v1/users/me": {
+        "summary": "获取当前用户信息",
+        "response_model": "UserResponse",
+        "auth": "Depends(get_current_user)",
+        "drift": "warning: MVP 规范为 GET /api/profile。Pro 版改为 /api/v1/users/me，响应模型不同。"
+      },
+      "POST /api/v1/auth/forgot-password": {
+        "summary": "请求密码重置验证码",
+        "request_model": "ForgotPasswordRequest",
+        "auth": false,
+        "drift": "info: MVP 规范无此端点。Pro 版新增基于 6 位数字验证码的密码重置流程。"
+      },
+      "POST /api/v1/auth/reset-password": {
+        "summary": "验证码重置密码",
+        "request_model": "ResetPasswordRequest",
+        "auth": false,
+        "drift": "warning: MVP 规范为 POST /api/admin/reset-password（管理员重置），Pro 版改为用户自助重置。"
+      },
+      "POST /api/v1/users/topup": {
+        "summary": "充值积分（Mock，生产应接入支付网关）",
+        "request_model": "TopupRequest",
+        "response_model": "TopupResponse",
+        "auth": "Depends(get_current_user)",
+        "drift": "info: MVP 规范无此端点（MVP 通过 admin/recharge 充值）。Pro 版新增用户自助 Mock 充值。"
+      },
+      "POST /api/v1/search": {
+        "summary": "30天热力图一次性搜索（扣积分）",
+        "request_model": "SearchRequest",
+        "response_model": "SearchResponse",
+        "auth": "Depends(get_current_user)",
+        "drift": "info: MVP 规范无独立搜索端点。Pro 版新增，支持 Mock/SerpApi 双模式，分级定价（1日=1积分，多日=5积分）。"
+      },
+      "POST /api/v1/quote/search": {
+        "summary": "搜索费用询价（不扣费）",
+        "request_model": "QuoteSearchRequest",
+        "response_model": "QuoteSearchResponse",
+        "auth": "Depends(get_current_user)"
+      },
+      "POST /api/v1/monitors": {
+        "summary": "创建监控任务（动态计费 + 立即初始搜索）",
+        "request_model": "MonitorCreateRequest",
+        "response_model": "MonitorResponse",
+        "status_code": 201,
+        "auth": "Depends(get_current_user)",
+        "drift": "warning: MVP 规范为 POST /api/subscriptions (SubscriptionCreate)。Pro 版路径和模型均不同。Pro 版创建后立即执行初始搜索（非前端触发）。"
+      },
+      "GET /api/v1/monitors": {
+        "summary": "获取当前用户的监控任务（排除软删除）",
+        "response_model": "List[MonitorResponse]",
+        "auth": "Depends(get_current_user)"
+      },
+      "DELETE /api/v1/monitors/{monitor_id}": {
+        "summary": "软删除监控任务（is_deleted=True）",
+        "status_code": 204,
+        "auth": "Depends(get_current_user)"
+      },
+      "GET /api/v1/monitors/trash": {
+        "summary": "获取回收站中的监控任务",
+        "response_model": "List[MonitorResponse]",
+        "auth": "Depends(get_current_user)",
+        "drift": "info: MVP 规范无此端点。Pro 版新增回收站功能。"
+      },
+      "POST /api/v1/monitors/{monitor_id}/restore": {
+        "summary": "恢复已删除的监控任务",
+        "response_model": "MonitorResponse",
+        "auth": "Depends(get_current_user)",
+        "drift": "info: MVP 规范无此端点。Pro 版新增恢复功能。"
+      },
+      "PUT /api/v1/monitors/{monitor_id}": {
+        "summary": "编辑监控任务（target_price/notification_email/start_date/return_date/interval_minutes）",
+        "request_model": "MonitorUpdateRequest",
+        "response_model": "MonitorResponse",
+        "auth": "Depends(get_current_user)"
+      },
+      "PATCH /api/v1/monitors/{monitor_id}/status": {
+        "summary": "暂停/恢复/存档监控任务（支持 active/paused/archived）",
+        "request_model": "MonitorStatusUpdate",
+        "response_model": "MonitorResponse",
+        "auth": "Depends(get_current_user)",
+        "drift": "warning: MVP 规范为 PATCH /api/subscriptions/{id}/status。Pro 版路径不同。"
+      },
+      "GET /api/v1/monitors/{monitor_id}/history": {
+        "summary": "获取价格历史",
+        "auth": "Depends(get_current_user)",
+        "response": "List[{ id, price, checked_at, booking_link }]",
+        "drift": "info: MVP 规范无此端点。Pro 版新增。"
+      },
+      "GET /api/v1/admin/stats": {
+        "summary": "管理员仪表盘统计",
+        "response_model": "AdminStatsResponse",
+        "auth": "Depends(get_current_admin)",
+        "drift": "info: MVP 规范无此端点。Pro 版新增。"
+      },
+      "GET /api/v1/admin/users": {
+        "summary": "获取所有用户列表",
+        "response_model": "List[AdminUserResponse]",
+        "auth": "Depends(get_current_admin)",
+        "drift": "info: MVP 规范无此端点。Pro 版新增。"
+      },
+      "GET /api/v1/admin/monitors": {
+        "summary": "获取所有用户的监控任务（含用户邮箱）",
+        "response_model": "List[AdminMonitorResponse]",
+        "auth": "Depends(get_current_admin)",
+        "drift": "info: MVP 规范无此端点。Pro 版新增。"
+      },
+      "DELETE /api/v1/admin/users/{user_id}": {
+        "summary": "删除用户及其所有数据（物理删除）",
+        "status_code": 204,
+        "auth": "Depends(get_current_admin)",
+        "drift": "warning: 此端点使用 session.delete() 物理删除用户、任务和价格历史。与 .cursorrules 的'严禁物理删除'规则存在冲突，但属于 admin 删除用户的例外场景。"
+      },
+      "POST /api/v1/admin/users/{user_id}/credits": {
+        "summary": "管理员调整用户积分（正数增加，负数扣除）",
+        "request_model": "AdminCreditAdjustRequest",
+        "response_model": "AdminCreditAdjustResponse",
+        "auth": "Depends(get_current_admin)"
+      },
+      "missing_from_mvp": {
+        "POST /api/admin/recharge": "warning: MVP 的管理员基础充值端点在 Pro 中不存在（被 admin/users/{id}/credits 替代）。",
+        "POST /api/admin/deposit": "warning: MVP Eagle 新增的总账户进货端点在 Pro 中不存在。",
+        "POST /api/admin/transfer": "warning: MVP Eagle 新增的管理员分销转账端点在 Pro 中不存在。",
+        "POST /api/auth/change-password": "warning: MVP 的修改密码端点在 Pro 中不存在（Pro 仅有 forgot-password + reset-password 流程）。",
+        "GET /api/track/{task_id}": "warning: MVP 的预订链接跟踪重定向端点在 Pro 中不存在。",
+        "POST /api/test/trigger-check": "warning: MVP 的手动触发价格检查端点在 Pro 中不存在。"
+      }
+    }
+  },
+
+  "pydantic_models": {
+    "SignupRequest": {
+      "description": "注册请求（Pro 新增）",
+      "fields": {
+        "email": { "type": "str" },
+        "password": { "type": "str", "min_length": 6 },
+        "full_name": { "type": "str", "optional": true },
+        "phone": { "type": "str", "optional": true }
+      }
+    },
+    "TokenResponse": {
+      "description": "登录/注册成功返回的 Token + 用户信息",
+      "fields": {
+        "access_token": { "type": "str" },
+        "token_type": { "type": "str", "default": "bearer" },
+        "user_id": { "type": "int" },
+        "email": { "type": "str" },
+        "full_name": { "type": "str", "optional": true },
+        "role": { "type": "str", "default": "user" },
+        "credits": { "type": "int", "default": 0 }
+      }
+    },
+    "UserResponse": {
+      "description": "用户信息响应",
+      "fields": {
+        "id": { "type": "int" },
+        "email": { "type": "str" },
+        "phone": { "type": "str", "optional": true },
+        "full_name": { "type": "str", "optional": true },
+        "role": { "type": "str" },
+        "credits": { "type": "int", "default": 0 },
+        "created_at": { "type": "str" }
+      }
+    },
+    "SearchRequest": {
+      "description": "一次性航班搜索请求",
+      "fields": {
+        "origin": { "type": "str", "min_length": 3, "max_length": 3 },
+        "destination": { "type": "str", "min_length": 3, "max_length": 3 },
+        "start_date": { "type": "str" },
+        "days": { "type": "int", "default": 30, "ge": 1, "le": 60 },
+        "cabin_class": { "type": "str", "default": "economy" },
+        "adults": { "type": "int", "default": 1, "ge": 1, "le": 9 },
+        "children": { "type": "int", "default": 0, "ge": 0, "le": 9 },
+        "max_stops": { "type": "int", "optional": true, "ge": 0 },
+        "departure_time_min": { "type": "str", "optional": true },
+        "departure_time_max": { "type": "str", "optional": true },
+        "sort_strategy": { "type": "str", "default": "best" },
+        "trip_type": { "type": "str", "default": "one_way" },
+        "return_date": { "type": "str", "optional": true },
+        "arrival_time_min": { "type": "str", "optional": true },
+        "arrival_time_max": { "type": "str", "optional": true },
+        "airline_include": { "type": "str", "optional": true }
+      }
+    },
+    "MonitorCreateRequest": {
+      "description": "创建监控任务请求（Phase 2: 含频率和时长）",
+      "fields": {
+        "origin": { "type": "str", "min_length": 3, "max_length": 3 },
+        "destination": { "type": "str", "min_length": 3, "max_length": 3 },
+        "start_date": { "type": "str" },
+        "days": { "type": "int", "default": 30, "ge": 1, "le": 60 },
+        "cabin_class": { "type": "str", "default": "economy" },
+        "adults": { "type": "int", "default": 1, "ge": 1, "le": 9 },
+        "children": { "type": "int", "default": 0, "ge": 0, "le": 9 },
+        "target_price": { "type": "float", "optional": true, "gt": 0 },
+        "notification_email": { "type": "str", "optional": true },
+        "max_stops": { "type": "int", "optional": true, "ge": 0, "le": 2 },
+        "departure_time_min": { "type": "str", "optional": true },
+        "departure_time_max": { "type": "str", "optional": true },
+        "sort_strategy": { "type": "str", "default": "best" },
+        "trip_type": { "type": "str", "default": "one_way" },
+        "return_date": { "type": "str", "optional": true },
+        "arrival_time_min": { "type": "str", "optional": true },
+        "arrival_time_max": { "type": "str", "optional": true },
+        "airline_include": { "type": "str", "optional": true },
+        "interval_minutes": { "type": "int", "default": 240, "ge": 10, "le": 1440, "description": "检查频率（分钟）" },
+        "duration_days": { "type": "int", "default": 7, "ge": 1, "le": 30, "description": "监控持续天数" }
+      }
+    },
+    "MonitorResponse": {
+      "description": "监控任务响应（Phase 2: 含调度字段）",
+      "fields": {
+        "id": { "type": "int" },
+        "origin": { "type": "str" },
+        "destination": { "type": "str" },
+        "start_date": { "type": "str" },
+        "days": { "type": "int" },
+        "cabin_class": { "type": "str" },
+        "adults": { "type": "int" },
+        "children": { "type": "int" },
+        "target_price": { "type": "float", "optional": true },
+        "notification_email": { "type": "str", "optional": true },
+        "status": { "type": "str" },
+        "lowest_price": { "type": "float", "optional": true },
+        "lowest_price_date": { "type": "str", "optional": true },
+        "current_price": { "type": "float", "optional": true },
+        "last_checked_at": { "type": "str", "optional": true },
+        "created_at": { "type": "str" },
+        "booking_link": { "type": "str", "optional": true },
+        "airline": { "type": "str", "optional": true },
+        "flight_number": { "type": "str", "optional": true },
+        "max_stops": { "type": "int", "optional": true },
+        "departure_time_min": { "type": "str", "optional": true },
+        "departure_time_max": { "type": "str", "optional": true },
+        "sort_strategy": { "type": "str", "default": "best" },
+        "trip_type": { "type": "str", "default": "one_way" },
+        "return_date": { "type": "str", "optional": true },
+        "arrival_time_min": { "type": "str", "optional": true },
+        "arrival_time_max": { "type": "str", "optional": true },
+        "airline_include": { "type": "str", "optional": true },
+        "baggage_info": { "type": "str", "optional": true },
+        "interval_minutes": { "type": "int", "default": 240 },
+        "end_date": { "type": "str", "optional": true },
+        "next_run_time": { "type": "str", "optional": true },
+        "total_credits_deducted": { "type": "int", "default": 0 }
+      }
+    },
+    "MonitorUpdateRequest": {
+      "description": "编辑监控任务请求（Phase 2: 含频率修改）",
+      "fields": {
+        "target_price": { "type": "float", "optional": true, "gt": 0 },
+        "notification_email": { "type": "str", "optional": true },
+        "start_date": { "type": "str", "optional": true },
+        "return_date": { "type": "str", "optional": true },
+        "interval_minutes": { "type": "int", "optional": true, "ge": 10, "le": 1440, "description": "修改检查频率" }
+      }
+    },
+    "MonitorStatusUpdate": {
+      "description": "暂停/恢复/存档监控任务请求",
+      "fields": {
+        "status": { "type": "str", "description": "paused / active / archived" }
+      }
+    },
+    "QuoteSearchRequest": {
+      "description": "搜索询价请求",
+      "fields": {
+        "days": { "type": "int", "default": 30, "ge": 1, "le": 60 }
+      }
+    },
+    "QuoteSearchResponse": {
+      "description": "搜索询价响应",
+      "fields": {
+        "cost": { "type": "int" },
+        "currency": { "type": "str", "default": "credits" },
+        "user_credits": { "type": "int" },
+        "sufficient": { "type": "bool" }
+      }
+    },
+    "ForgotPasswordRequest": {
+      "fields": { "email": { "type": "str" } }
+    },
+    "ResetPasswordRequest": {
+      "fields": {
+        "email": { "type": "str" },
+        "token": { "type": "str", "min_length": 6, "max_length": 6 },
+        "new_password": { "type": "str", "min_length": 6 }
+      },
+      "drift": "warning: MVP 规范的 ResetPasswordRequest 包含 target_email + new_password（管理员操作）。Pro 版改为用户自助操作，需提供 email + token + new_password。"
+    },
+    "TopupRequest": {
+      "fields": { "amount": { "type": "int", "default": 50, "ge": 1, "le": 9999 } }
+    },
+    "TopupResponse": {
+      "fields": {
+        "message": { "type": "str" },
+        "credits_added": { "type": "int" },
+        "credits_total": { "type": "int" }
+      }
+    },
+    "AdminStatsResponse": {
+      "fields": {
+        "total_users": { "type": "int" },
+        "active_monitors": { "type": "int" },
+        "total_searches": { "type": "int" },
+        "scheduler_status": { "type": "str" },
+        "last_run_time": { "type": "str" }
+      }
+    },
+    "AdminUserResponse": {
+      "fields": {
+        "id": { "type": "int" },
+        "email": { "type": "str" },
+        "role": { "type": "str" },
+        "credits": { "type": "int" },
+        "created_at": { "type": "str" }
+      }
+    },
+    "AdminMonitorResponse": {
+      "fields": {
+        "id": { "type": "int" },
+        "user_id": { "type": "int", "optional": true },
+        "user_email": { "type": "str" },
+        "origin": { "type": "str" },
+        "destination": { "type": "str" },
+        "start_date": { "type": "str" },
+        "days": { "type": "int" },
+        "cabin_class": { "type": "str" },
+        "status": { "type": "str" },
+        "current_price": { "type": "float", "optional": true },
+        "lowest_price": { "type": "float", "optional": true },
+        "target_price": { "type": "float", "optional": true },
+        "trip_type": { "type": "str" },
+        "created_at": { "type": "str" },
+        "last_checked_at": { "type": "str", "optional": true }
+      }
+    },
+    "AdminCreditAdjustRequest": {
+      "fields": { "amount": { "type": "int" } }
+    },
+    "AdminCreditAdjustResponse": {
+      "fields": {
+        "user_id": { "type": "int" },
+        "email": { "type": "str" },
+        "credits_before": { "type": "int" },
+        "credits_after": { "type": "int" },
+        "amount_adjusted": { "type": "int" }
+      }
+    }
+  },
+
+  "frontend_architecture": {
+    "framework": "React Native (Expo SDK 54) + expo-router v6",
+    "navigation": "expo-router file-based routing with bottom tabs",
+    "state_management": "React hooks (useState/useCallback/useEffect)",
+    "styling": "StyleSheet (NativeWind/TailwindCSS declared but not actively used)",
+    "pages": {
+      "app/index.tsx": "启动页，根据认证状态路由到 login 或 search",
+      "app/_layout.tsx": "根布局 (Stack Navigator)",
+      "app/(tabs)/_layout.tsx": "底部 Tab 导航 (Search/Monitors/Profile)",
+      "app/(tabs)/search.tsx": "搜索页面（热力图 + 高级筛选）",
+      "app/(tabs)/monitors.tsx": "监控任务列表页",
+      "app/(tabs)/profile.tsx": "用户资料页（含 TopUp + Admin 入口）",
+      "app/auth/login.tsx": "登录页",
+      "app/auth/signup.tsx": "注册页",
+      "app/auth/forgot.tsx": "忘记密码页（两步：发送验证码 → 重置密码）"
+    },
+    "components": {
+      "AdminPanel.tsx": "管理员面板 Modal（统计/用户列表/积分调整/删除用户）",
+      "AdvancedFilters.tsx": "高级搜索筛选器（转机/时间/航司/联盟/策略）",
+      "AirlinePicker.tsx": "航司选择器 Modal",
+      "AlliancePicker.tsx": "航空联盟选择器 Modal",
+      "CreateMonitorModal.tsx": "创建监控任务 Modal（含询价确认）",
+      "DatePicker.tsx": "日期选择器（Web 用 TextInput，Native 用 DateTimePicker）",
+      "EditMonitorModal.tsx": "编辑监控任务 Modal",
+      "HeatmapGrid.tsx": "热力图网格组件（Web 端放大显示日期+价格）",
+      "MonitorCard.tsx": "监控任务卡片组件",
+      "TimeRangeSlider.tsx": "时间范围滑块组件",
+      "TrashModal.tsx": "回收站 Modal（查看和恢复已删除任务）"
+    },
+    "hooks": {
+      "useAuth.ts": "认证状态管理（login/signup/logout/refreshUserInfo）",
+      "useMonitors.ts": "监控任务 CRUD（含询价确认流程）",
+      "useSearch.ts": "搜索逻辑（含询价 → 确认 → 搜索完整流程）"
+    },
+    "services": {
+      "api.ts": "API 请求封装（authApi/userApi/searchApi/monitorApi/adminApi + 401 自动登出）",
+      "storage.ts": "Token 持久化存储（Web: localStorage, Native: AsyncStorage）"
+    },
+    "drift": "warning: 前端 types/index.ts 中 MonitorTask 接口的字段命名与后端 MonitorResponse 存在不一致。前端使用 departure_time_min/departure_time_max/arrival_time_min/arrival_time_max/sort_strategy/trip_type/return_date/airline_include/baggage_info 与后端一致，但 UserInfo.user_id 为 number 类型而后端 TokenResponse.user_id 为 int（一致）。前端 MonitorTask 接口缺少 is_deleted 字段（后端不在 MonitorResponse 中返回此字段，正确）。"
+  },
+
+  "core_features_status": {
+    "flight_cache": {
+      "status": "PRESENT",
+      "location": "backend/main.py: FlightCache model + _search_serpapi_single_day()",
+      "description": "FlightCache 缓存表存在，按 (origin, destination, date) 唯一索引。缓存有效期由 CACHE_HOURS 控制（默认 4 小时）。读缓存 → SerpApi 查询 → 写缓存完整流程已实现。"
+    },
+    "soft_delete": {
+      "status": "PRESENT",
+      "location": "backend/main.py: MonitorTask.is_deleted + delete_monitor() + restore_monitor() + get_trash_monitors()",
+      "description": "软删除完整实现：DELETE 设 is_deleted=True + status=paused，GET monitors 过滤 is_deleted==False，回收站 GET trash，恢复 POST restore。"
+    },
+    "email_notification": {
+      "status": "PRESENT",
+      "location": "backend/main.py: _send_email_core() + send_alert_email() + send_reset_code_email()",
+      "description": "双通道邮件：Brevo HTTP API + 原生 SMTP。降价提醒邮件 + 密码重置验证码邮件均已实现。"
+    },
+    "scheduler": {
+      "status": "PRESENT",
+      "location": "backend/main.py: _process_active_monitors() + start_scheduler()",
+      "description": "Phase 2: APScheduler BackgroundScheduler，每 5 分钟心跳轮询。Per-task 独立调度：根据 next_run_time 判断是否执行，end_date 判断是否过期。支持 10m/30m/1h/4h/12h/24h 六档频率。"
+    },
+    "quote_system": {
+      "status": "PRESENT",
+      "location": "backend/main.py: POST /api/v1/quote/search + frontend useSearch.ts + useMonitors.ts",
+      "description": "搜索前询价 → UI 确认 → 执行的完整流程。分级定价：单日 1 积分，多日 5 积分。"
+    },
+    "data_isolation": {
+      "status": "PRESENT",
+      "location": "backend/main.py: all monitor endpoints filter by current_user.id",
+      "description": "所有监控任务 CRUD 均通过 user_id == current_user.id 实现数据隔离。"
+    },
+    "rbac": {
+      "status": "PRESENT",
+      "location": "backend/main.py: get_current_user() + get_current_admin()",
+      "description": "角色系统：user/admin/agent。Admin API 通过 Depends(get_current_admin) 保护。"
+    },
+    "mock_mode": {
+      "status": "PRESENT",
+      "location": "backend/main.py: USE_MOCK_DATA 环境变量控制",
+      "description": "Mock 模式完整保留：生成随机价格/航班数据，支持长短途差异化定价、舱位乘数、行李信息 Mock。"
+    }
+  },
+
+  "tech_stack": {
+    "backend": {
+      "language": "Python 3.12",
+      "framework": "FastAPI 0.109.0",
+      "orm": "SQLModel (SQLAlchemy)",
+      "database": "PostgreSQL (Supabase)",
+      "auth": "bcrypt (passlib) + JWT (python-jose, HS256)",
+      "scheduler": "APScheduler 3.x (BackgroundScheduler)",
+      "email": "Brevo HTTP API / SMTP (双通道)",
+      "flight_data": "SerpApi Google Flights / Mock",
+      "server": "Uvicorn 0.27.0"
+    },
+    "frontend": {
+      "framework": "React Native 0.81.5 + Expo SDK 54",
+      "router": "expo-router v6 (file-based routing)",
+      "language": "TypeScript 5.9",
+      "state": "React Hooks",
+      "storage": "localStorage (Web) / AsyncStorage (Native)",
+      "ui_components": "React Native core + custom components"
+    }
+  }
+}

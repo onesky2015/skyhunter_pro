@@ -1,0 +1,35 @@
+# SkyHunter CI - 后端测试与构建
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Lint (optional)
+        run: |
+          python -c "import main; print('Import OK')"
+        env:
+          USE_MOCK_DATA: "true"
+          JWT_SECRET_KEY: "test-secret-key-for-ci-only"
+          DATABASE_URL: "sqlite:///./test_ci.db"

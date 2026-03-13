@@ -1,0 +1,2726 @@
+# filename: backend/main.py
+"""
+SkyHunter Pro - FastAPI Backend v3.3.0 (Pro-Phase2)
+
+航班价格监控 SaaS 后端服务。
+从旧版 Streamlit MVP 完整重构为 RESTful API，服务 React Native 前端。
+
+核心功能：
+1. POST /api/v1/search          - 30天热力图一次性搜索（支持单程/往返）
+2. POST /api/v1/monitors        - 创建持久化监控任务（存入 SQLite）
+3. GET  /api/v1/monitors        - 获取当前用户的监控任务
+4. DELETE /api/v1/monitors/{id} - 删除当前用户的监控任务
+5. 后台调度器 (APScheduler)     - 每5分钟心跳 + per-task 独立调度
+6. 邮件通知 (Brevo API)         - 降价达标时发送邮件
+7. Mock 模式                    - 节省 SerpApi 调用费用
+
+v3.3.0 / Pro-Phase2 重点：
+- 用户注册/登录 (Email + Password, bcrypt + JWT)
+- 数据隔离 (user_id 外键，用户只能看到自己的数据)
+- 角色系统 (user/admin/agent，默认 user)
+- GET /api/v1/users/me 获取当前用户信息
+- Per-task 独立调度 (interval_minutes / end_date / next_run_time)
+- 创建监控动态计费 (duration_days * interval_minutes)
+
+v3.1.0 功能保留：
+- 往返航班支持 (trip_type + return_date)
+- 到达时间过滤 (arrival_time_min/max)
+- 航司过滤 (airline_include)
+- 行李信息 Mock (baggage_info)
+"""
+
+import os
+import json
+import math
+import random
+import hashlib
+import logging
+import time as _time_module
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from contextlib import asynccontextmanager
+from datetime import date, datetime, timedelta
+from typing import Optional, List
+from uuid import uuid4
+from dotenv import load_dotenv
+load_dotenv()  
+
+from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from pydantic import BaseModel, Field, EmailStr
+from starlette.requests import Request as StarletteRequest
+from starlette.responses import JSONResponse, RedirectResponse
+from sqlmodel import SQLModel, Field as SQLField, Session, create_engine, select
+from sqlalchemy import UniqueConstraint
+
+from config import (
+    APP_VERSION, APP_DESCRIPTION, USE_MOCK_DATA, CACHE_HOURS, SCHEDULER_INTERVAL_HOURS,
+    EMAIL_PROVIDER, BREVO_API_KEY, EMAIL_SENDER, EMAIL_PASSWORD, SMTP_HOST, SMTP_PORT, ADMIN_EMAIL, API_BASE_URL,
+    JWT_SECRET_KEY, JWT_ALGORITHM, JWT_EXPIRE_HOURS, CORS_ALLOWED_ORIGINS,
+    logger, FORGOT_PASSWORD_WINDOW_SECONDS, FORGOT_PASSWORD_MAX_REQUESTS,
+    RESET_PASSWORD_WINDOW_SECONDS, RESET_PASSWORD_MAX_ATTEMPTS,
+    LOGIN_WINDOW_SECONDS, LOGIN_MAX_ATTEMPTS,
+    _login_attempts, _forgot_password_attempts, _reset_password_attempts,
+    DATABASE_FILE, _is_sqlite, DB_MODE, SERPAPI_API_KEY
+)
+from db import engine, get_session
+
+# Models & Schemas Imports (Refactored)
+from models.database import User, MonitorTask, FlightCache, PriceHistory, PasswordReset, TransactionHistory
+from schemas.api_models import (
+    SignupRequest, TokenResponse, UserResponse, TransactionHistoryResponse,
+    SearchRequest, MonitorCreateRequest, MonitorResponse, HeatmapCell,
+    FlightDetail, SearchResponse, AdminStatsResponse, AdminUserResponse,
+    AdminMonitorResponse, AdminCreditAdjustRequest, AdminCreditAdjustResponse,
+    ResetPasswordRequest, ChangePasswordRequest, PricingQuoteRequest, PricingQuoteResponse,
+    UpdateMonitorStatusRequest, UpdateMonitorRequest
+)
+
+def generate_reset_token() -> str:
+    import random
+    return str(random.randint(100000, 999999))
+    
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+# ============================================================================
+# 认证依赖（passlib + python-jose）
+# ============================================================================
+
+from passlib.context import CryptContext
+from jose import JWTError, jwt
+
+# ============================================================================
+# 安全工具
+# ============================================================================
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token")
+
+
+def hash_password(password: str) -> str:
+    """使用 bcrypt 哈希密码 (自动截断至72字节以符合 bcrypt 限制)"""
+    # 修复 ValueError: password cannot be longer than 72 bytes
+    return pwd_context.hash(password.encode("utf-8")[:72])
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """验证密码"""
+    # 修复验证时的 72 字节限制
+    return pwd_context.verify(plain_password.encode("utf-8")[:72], hashed_password)
+
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """
+    创建 JWT Access Token
+
+    Args:
+        data: 载荷数据，必须包含 "sub" (subject, 即 user email)
+        expires_delta: 过期时间增量
+
+    Returns:
+        编码后的 JWT 字符串
+    """
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta or timedelta(hours=JWT_EXPIRE_HOURS))
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+
+
+# ============================================================================
+# 认证依赖：获取当前用户
+# ============================================================================
+
+
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
+    """
+    FastAPI 依赖：从 JWT Token 解析当前用户
+
+    如果 Token 无效或用户不存在，抛出 401 Unauthorized。
+
+    Args:
+        token: Bearer Token (由 OAuth2PasswordBearer 自动提取)
+
+    Returns:
+        User: 当前已认证的用户对象
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid authentication credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+
+    with Session(engine) as session:
+        statement = select(User).where(User.email == email)
+        user = session.exec(statement).first()
+        if user is None:
+            raise credentials_exception
+        return user
+
+
+# ============================================================================
+# Admin 依赖：要求当前用户为 admin 角色
+# ============================================================================
+
+
+async def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
+    """
+    FastAPI 依赖：确保当前用户具有 admin 角色。
+
+    如果用户不是 admin，抛出 403 Forbidden。
+
+    Args:
+        current_user: 已通过 JWT 认证的用户对象
+
+    Returns:
+        User: 当前已认证的 admin 用户对象
+    """
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+    return current_user
+
+
+# ============================================================================
+# 航空公司数据（Mock 模式使用）
+# ============================================================================
+
+MOCK_AIRLINES = [
+    {"name": "United Airlines", "code": "UA", "alliance": "Star Alliance"},
+    {"name": "Air China", "code": "CA", "alliance": "Star Alliance"},
+    {"name": "China Eastern", "code": "MU", "alliance": "SkyTeam"},
+    {"name": "Delta Air Lines", "code": "DL", "alliance": "SkyTeam"},
+    {"name": "American Airlines", "code": "AA", "alliance": "Oneworld"},
+    {"name": "Cathay Pacific", "code": "CX", "alliance": "Oneworld"},
+    {"name": "Singapore Airlines", "code": "SQ", "alliance": "Star Alliance"},
+    {"name": "ANA", "code": "NH", "alliance": "Star Alliance"},
+    {"name": "Japan Airlines", "code": "JL", "alliance": "Oneworld"},
+    {"name": "Korean Air", "code": "KE", "alliance": "SkyTeam"},
+    {"name": "Lufthansa", "code": "LH", "alliance": "Star Alliance"},
+    {"name": "Turkish Airlines", "code": "TK", "alliance": "Star Alliance"},
+    {"name": "Emirates", "code": "EK", "alliance": "None"},
+    {"name": "Qatar Airways", "code": "QR", "alliance": "Oneworld"},
+    {"name": "EVA Air", "code": "BR", "alliance": "Star Alliance"},
+]
+
+ALLIANCE_MEMBERS = {}
+for _a in MOCK_AIRLINES:
+    alliance = _a.get("alliance", "None")
+    if alliance != "None":
+        ALLIANCE_MEMBERS.setdefault(alliance, set()).add(_a["code"])
+        ALLIANCE_MEMBERS.setdefault(alliance.lower(), set()).add(_a["code"])
+
+CABIN_CLASS_MAP = {"economy": 1, "premium_economy": 2, "business": 3, "first": 4}
+CABIN_PRICE_MULTIPLIER = {"economy": 1.0, "premium_economy": 1.6, "business": 3.2, "first": 5.5}
+
+LONG_HAUL_PAIRS = {
+    ("JFK", "PVG"), ("PVG", "JFK"), ("LAX", "NRT"), ("NRT", "LAX"),
+    ("SFO", "HKG"), ("HKG", "SFO"), ("JFK", "LHR"), ("LHR", "JFK"),
+    ("LAX", "SIN"), ("SIN", "LAX"), ("ORD", "PEK"), ("PEK", "ORD"),
+    ("SFO", "PVG"), ("PVG", "SFO"),
+}
+
+MOCK_BAGGAGE_OPTIONS = [
+    "1x checked bag included",
+    "Carry-on only",
+    "1x carry-on + 1x checked bag",
+    "2x checked bags included",
+    "No checked bag",
+    "1x personal item only",
+]
+
+
+# ============================================================================
+# 核心业务逻辑：搜索引擎（与 v3.1.0 完全相同）
+# ============================================================================
+
+
+def _parse_time_to_minutes(time_str: Optional[str]) -> Optional[int]:
+    """将 HH:MM 格式的时间字符串转为自午夜起的分钟数。"""
+    if not time_str:
+        return None
+    try:
+        parts = time_str.strip().split(" ")
+        time_part = parts[-1] if len(parts) > 1 else parts[0]
+        h, m = time_part.split(":")[:2]
+        return int(h) * 60 + int(m)
+    except (ValueError, IndexError):
+        return None
+
+
+def _is_within_time_window(
+    time_value: Optional[str], time_min: Optional[str], time_max: Optional[str],
+) -> bool:
+    """检查时间是否在指定时间窗口内。"""
+    if time_min is None and time_max is None:
+        return True
+    val_minutes = _parse_time_to_minutes(time_value)
+    if val_minutes is None:
+        return True
+    min_minutes = _parse_time_to_minutes(time_min)
+    max_minutes = _parse_time_to_minutes(time_max)
+    if min_minutes is not None and val_minutes < min_minutes:
+        return False
+    if max_minutes is not None and val_minutes > max_minutes:
+        return False
+    return True
+
+
+def _matches_airline_filter(
+    airline_name: Optional[str], airline_code: Optional[str], airline_include: Optional[str],
+) -> bool:
+    """检查航班是否匹配航司过滤条件。"""
+    if not airline_include:
+        return True
+    filter_val = airline_include.strip().upper()
+    if not filter_val:
+        return True
+    if airline_code and airline_code.upper() == filter_val:
+        return True
+    alliance_key = airline_include.strip().lower()
+    if alliance_key in ALLIANCE_MEMBERS:
+        if airline_code and airline_code.upper() in ALLIANCE_MEMBERS[alliance_key]:
+            return True
+        for mock_a in MOCK_AIRLINES:
+            if mock_a.get("alliance", "").lower() == alliance_key:
+                if airline_name and mock_a["name"].lower() in airline_name.lower():
+                    return True
+    if airline_name and filter_val.lower() in airline_name.lower():
+        return True
+    return False
+
+
+def _is_excluded_airline(
+    airline_name: Optional[str], airline_code: Optional[str], excluded_airlines: Optional[str],
+) -> bool:
+    """检查航班是否在排除航司列表中（任一匹配则排除）。"""
+    if not excluded_airlines:
+        return False
+    codes = [c.strip().upper() for c in excluded_airlines.split(",") if c.strip()]
+    if not codes:
+        return False
+    if airline_code and airline_code.upper() in codes:
+        return True
+    if airline_name:
+        name_upper = airline_name.upper()
+        for code in codes:
+            if len(code) >= 2 and code in name_upper:
+                return True
+    return False
+
+
+def _generate_mock_baggage() -> str:
+    return random.choice(MOCK_BAGGAGE_OPTIONS)
+
+
+def _generate_mock_heatmap(
+    origin: str, destination: str, start_date: date, days: int, cabin_class: str,
+) -> List[dict]:
+    multiplier = CABIN_PRICE_MULTIPLIER.get(cabin_class, 1.0)
+    base_low, base_high = (800, 1800) if (origin, destination) in LONG_HAUL_PAIRS else (600, 1500)
+    results = []
+    for i in range(days):
+        current_date = start_date + timedelta(days=i)
+        date_str = current_date.isoformat()
+        if random.random() < 0.08:
+            results.append({"date": date_str, "price": None})
+            continue
+        base_price = random.uniform(base_low, base_high)
+        if current_date.weekday() >= 5:
+            base_price *= random.uniform(1.15, 1.30)
+        days_from_now = (current_date - date.today()).days
+        if days_from_now < 7:
+            base_price *= random.uniform(1.20, 1.40)
+        elif days_from_now < 14:
+            base_price *= random.uniform(1.05, 1.15)
+        results.append({"date": date_str, "price": round(base_price * multiplier, 2)})
+    return results
+
+
+def _classify_heatmap_levels(raw_data: List[dict]) -> List[HeatmapCell]:
+    valid_prices = [d["price"] for d in raw_data if d["price"] is not None]
+    if not valid_prices:
+        return [HeatmapCell(date=d["date"], price=None, level="unavailable") for d in raw_data]
+    avg_price = sum(valid_prices) / len(valid_prices)
+    low_t, high_t = avg_price * 0.85, avg_price * 1.15
+    cells = []
+    for d in raw_data:
+        p = d["price"]
+        if p is None:
+            level = "unavailable"
+        elif p <= low_t:
+            level = "low"
+        elif p <= high_t:
+            level = "medium"
+        else:
+            level = "high"
+        cells.append(HeatmapCell(date=d["date"], price=p, level=level))
+    return cells
+
+
+def _generate_mock_flight_detail(
+    origin: str, destination: str, departure_date: str, price: float,
+    max_stops: Optional[int] = None,
+    departure_time_min: Optional[str] = None, departure_time_max: Optional[str] = None,
+    arrival_time_min: Optional[str] = None, arrival_time_max: Optional[str] = None,
+    airline_include: Optional[str] = None,
+) -> FlightDetail:
+    if airline_include and airline_include.strip():
+        filter_val = airline_include.strip().upper()
+        matched = [a for a in MOCK_AIRLINES if a["code"] == filter_val]
+        if not matched:
+            alliance_key = airline_include.strip().lower()
+            if alliance_key in ALLIANCE_MEMBERS:
+                member_codes = ALLIANCE_MEMBERS[alliance_key]
+                matched = [a for a in MOCK_AIRLINES if a["code"] in member_codes]
+        if not matched:
+            matched = [a for a in MOCK_AIRLINES if filter_val.lower() in a["name"].lower()]
+        airline = random.choice(matched) if matched else random.choice(MOCK_AIRLINES)
+    else:
+        airline = random.choice(MOCK_AIRLINES)
+
+    flight_num = f"{airline['code']}{random.randint(100, 9999)}"
+    min_hour, max_hour = 6, 22
+    if departure_time_min:
+        parsed = _parse_time_to_minutes(departure_time_min)
+        if parsed is not None:
+            min_hour = max(min_hour, parsed // 60)
+    if departure_time_max:
+        parsed = _parse_time_to_minutes(departure_time_max)
+        if parsed is not None:
+            max_hour = min(max_hour, parsed // 60)
+    if min_hour > max_hour:
+        min_hour, max_hour = 6, 22
+
+    dep_hour = random.randint(min_hour, max_hour)
+    dep_min = random.choice([0, 15, 30, 45])
+    duration = random.randint(180, 960)
+    arr_total_min = dep_hour * 60 + dep_min + duration
+    arr_hour = (arr_total_min // 60) % 24
+    arr_min = arr_total_min % 60
+
+    if arrival_time_min or arrival_time_max:
+        arr_min_limit = _parse_time_to_minutes(arrival_time_min)
+        arr_max_limit = _parse_time_to_minutes(arrival_time_max)
+        arr_current = arr_hour * 60 + arr_min
+        if arr_min_limit is not None and arr_current < arr_min_limit:
+            duration += (arr_min_limit - arr_current)
+        if arr_max_limit is not None and arr_current > arr_max_limit:
+            duration = max(120, duration - (arr_current - arr_max_limit))
+        arr_total_min = dep_hour * 60 + dep_min + duration
+        arr_hour = (arr_total_min // 60) % 24
+        arr_min = arr_total_min % 60
+
+    if max_stops is not None:
+        if max_stops == 0:
+            stops = 0
+        elif max_stops == 1:
+            stops = random.choices([0, 1], weights=[40, 60])[0]
+        else:
+            stops = random.choices([0, 1, 2], weights=[30, 45, 25])[0]
+    else:
+        stops = random.choices([0, 1, 2], weights=[40, 45, 15])[0]
+
+    booking_link = f"https://www.google.com/flights?flt={origin}.{destination}.{departure_date}&sc=e&px=1"
+    baggage = _generate_mock_baggage()
+    return FlightDetail(
+        airline=airline["name"], flight_number=flight_num,
+        departure_time=f"{dep_hour:02d}:{dep_min:02d}",
+        arrival_time=f"{arr_hour:02d}:{arr_min:02d}",
+        duration_minutes=duration, stops=stops, booking_link=booking_link,
+        baggage_info=baggage,
+    )
+
+
+def _build_flight_cache_signature(
+    origin: str,
+    destination: str,
+    departure_date: date,
+    cabin_class: str = "economy",
+    adults: int = 1,
+    children: int = 0,
+    max_stops: Optional[int] = None,
+    departure_time_min: Optional[str] = None,
+    departure_time_max: Optional[str] = None,
+    sort_strategy: str = "best",
+    arrival_time_min: Optional[str] = None,
+    arrival_time_max: Optional[str] = None,
+    airline_include: Optional[str] = None,
+    excluded_airlines: Optional[str] = None,
+    return_date: Optional[date] = None,
+) -> str:
+    """
+    生成稳定的查询签名，避免不同筛选条件错误命中同一条缓存。
+    """
+    signature_payload = {
+        "origin": origin.upper(),
+        "destination": destination.upper(),
+        "date": departure_date.isoformat(),
+        "cabin_class": cabin_class,
+        "adults": adults,
+        "children": children,
+        "max_stops": max_stops,
+        "departure_time_min": departure_time_min,
+        "departure_time_max": departure_time_max,
+        "sort_strategy": sort_strategy,
+        "arrival_time_min": arrival_time_min,
+        "arrival_time_max": arrival_time_max,
+        "airline_include": airline_include,
+        "excluded_airlines": excluded_airlines,
+        "return_date": return_date.isoformat() if return_date else None,
+    }
+    raw = json.dumps(signature_payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _search_serpapi_single_day(
+    origin: str, destination: str, departure_date: date,
+    cabin_class: str = "economy", adults: int = 1, children: int = 0,
+    max_stops: Optional[int] = None,
+    departure_time_min: Optional[str] = None, departure_time_max: Optional[str] = None,
+    sort_strategy: str = "best",
+    arrival_time_min: Optional[str] = None, arrival_time_max: Optional[str] = None,
+    airline_include: Optional[str] = None, excluded_airlines: Optional[str] = None,
+    return_date: Optional[date] = None,
+) -> Optional[dict]:
+    """调用 SerpApi Google Flights 查询单日价格（带数据库缓存）"""
+
+    # ── Step A: 读取缓存 ──
+    date_str = departure_date.isoformat()
+    query_signature = _build_flight_cache_signature(
+        origin=origin,
+        destination=destination,
+        departure_date=departure_date,
+        cabin_class=cabin_class,
+        adults=adults,
+        children=children,
+        max_stops=max_stops,
+        departure_time_min=departure_time_min,
+        departure_time_max=departure_time_max,
+        sort_strategy=sort_strategy,
+        arrival_time_min=arrival_time_min,
+        arrival_time_max=arrival_time_max,
+        airline_include=airline_include,
+        excluded_airlines=excluded_airlines,
+        return_date=return_date,
+    )
+    try:
+        with Session(engine) as session:
+            cached = session.exec(
+                select(FlightCache).where(
+                    FlightCache.origin == origin.upper(),
+                    FlightCache.destination == destination.upper(),
+                    FlightCache.date == date_str,
+                )
+            ).first()
+            if cached:
+                cache_age_hours = (datetime.utcnow() - datetime.fromisoformat(cached.updated_at)).total_seconds() / 3600
+                if cache_age_hours < CACHE_HOURS:
+                    if cached.data:
+                        cached_payload = json.loads(cached.data)
+                        if isinstance(cached_payload, dict) and cached_payload.get("query_signature") == query_signature:
+                            logger.info(f"📦 Cache HIT: {origin}->{destination} {date_str} (age: {cache_age_hours:.1f}h)")
+                            cached_result = cached_payload.get("result")
+                            if isinstance(cached_result, dict):
+                                return cached_result
+                        else:
+                            logger.info(f"📦 Cache BYPASS: {origin}->{destination} {date_str} (signature mismatch)")
+                    elif cached.price is not None:
+                        logger.info(f"📦 Cache BYPASS: {origin}->{destination} {date_str} (legacy price-only entry)")
+                    return None
+                else:
+                    logger.info(f"📦 Cache STALE: {origin}->{destination} {date_str} (age: {cache_age_hours:.1f}h > {CACHE_HOURS}h)")
+    except Exception as e:
+        logger.warning(f"📦 Cache read error: {e}")
+
+    # ── Step B: 调用 SerpApi ──
+    try:
+        from serpapi import GoogleSearch
+    except ImportError:
+        logger.error("serpapi 库未安装")
+        return None
+    if not SERPAPI_API_KEY:
+        logger.error("SERPAPI_API_KEY 未配置")
+        return None
+
+    params = {
+        "engine": "google_flights", "api_key": SERPAPI_API_KEY,
+        "departure_id": origin.upper(), "arrival_id": destination.upper(),
+        "outbound_date": departure_date.strftime("%Y-%m-%d"),
+        "currency": "USD", "hl": "en", "adults": adults,
+        "travel_class": CABIN_CLASS_MAP.get(cabin_class, 1),
+    }
+    if return_date:
+        params["type"] = "1"
+        params["return_date"] = return_date.strftime("%Y-%m-%d")
+    else:
+        params["type"] = "2"
+    if max_stops is not None:
+        params["max_stops"] = max_stops
+    if children > 0:
+        params["children"] = children
+
+    logger.info(f"🔍 SerpApi: {origin}->{destination} {departure_date}")
+    try:
+        search = GoogleSearch(params)
+        results = search.get_dict()
+        if "error" in results:
+            return None
+        best_flights = results.get("best_flights", []) or []
+        other_flights = results.get("other_flights", []) or []
+        all_flights = best_flights + other_flights
+        if not all_flights:
+            return None
+
+        filtered_flights = []
+        for flight in all_flights:
+            segments = flight.get("flights", [])
+            if not segments:
+                filtered_flights.append(flight)
+                continue
+            first_seg, last_seg = segments[0], segments[-1]
+            dep_airport = first_seg.get("departure_airport", {})
+            dep_time = dep_airport.get("time") if isinstance(dep_airport, dict) else None
+            if not _is_within_time_window(dep_time, departure_time_min, departure_time_max):
+                continue
+            arr_airport = last_seg.get("arrival_airport", {})
+            arr_time = arr_airport.get("time") if isinstance(arr_airport, dict) else None
+            if not _is_within_time_window(arr_time, arrival_time_min, arrival_time_max):
+                continue
+            seg_airline = first_seg.get("airline")
+            seg_airline_code = first_seg.get("airline_code") or first_seg.get("flight_number", "")[:2]
+            if not _matches_airline_filter(seg_airline, seg_airline_code, airline_include):
+                continue
+            if _is_excluded_airline(seg_airline, seg_airline_code, excluded_airlines):
+                continue
+            filtered_flights.append(flight)
+
+        if not filtered_flights:
+            return None
+        if sort_strategy == "cheapest":
+            chosen = min(filtered_flights, key=lambda f: f.get("price", float("inf")))
+        else:
+            best_in_filtered = [f for f in filtered_flights if f in best_flights]
+            chosen = min(best_in_filtered or filtered_flights, key=lambda f: f.get("price", float("inf")))
+
+        price = chosen.get("price")
+        if price is None:
+            return None
+        segments = chosen.get("flights", [])
+        airline_name = flight_number = dep_time = arr_time = None
+        duration = chosen.get("total_duration")
+        stops = len(chosen.get("layovers", []))
+        if segments:
+            first_seg = segments[0]
+            airline_name = first_seg.get("airline")
+            flight_number = first_seg.get("flight_number")
+            dep_airport = first_seg.get("departure_airport", {})
+            dep_time = dep_airport.get("time") if isinstance(dep_airport, dict) else None
+            last_seg = segments[-1]
+            arr_airport = last_seg.get("arrival_airport", {})
+            arr_time = arr_airport.get("time") if isinstance(arr_airport, dict) else None
+        booking_link = results.get("search_metadata", {}).get("google_flights_url", "")
+        if not booking_link:
+            dep_str = departure_date.strftime("%Y-%m-%d")
+            sc = {"economy": "e", "premium_economy": "p", "business": "b", "first": "f"}.get(cabin_class, "e")
+            booking_link = f"https://www.google.com/flights?flt={origin}.{destination}.{dep_str}&sc={sc}&px={adults}"
+        baggage = None
+        extensions = chosen.get("extensions", [])
+        if extensions:
+            for ext in extensions:
+                if isinstance(ext, str) and ("bag" in ext.lower() or "luggage" in ext.lower()):
+                    baggage = ext
+                    break
+        result_data = {
+            "price": float(price), "booking_link": booking_link,
+            "airline": airline_name, "flight_number": flight_number,
+            "departure_time": dep_time, "arrival_time": arr_time,
+            "duration_minutes": duration, "stops": stops, "baggage_info": baggage,
+        }
+
+        # ── Step B-Write: 写入/更新缓存 ──
+        try:
+            with Session(engine) as cache_session:
+                existing_cache = cache_session.exec(
+                    select(FlightCache).where(
+                        FlightCache.origin == origin.upper(),
+                        FlightCache.destination == destination.upper(),
+                        FlightCache.date == date_str,
+                    )
+                ).first()
+                if existing_cache:
+                    existing_cache.price = result_data["price"]
+                    existing_cache.data = json.dumps(
+                        {"query_signature": query_signature, "result": result_data},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    existing_cache.updated_at = datetime.utcnow().isoformat()
+                    cache_session.add(existing_cache)
+                else:
+                    new_cache = FlightCache(
+                        origin=origin.upper(),
+                        destination=destination.upper(),
+                        date=date_str,
+                        price=result_data["price"],
+                        data=json.dumps(
+                            {"query_signature": query_signature, "result": result_data},
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        updated_at=datetime.utcnow().isoformat(),
+                    )
+                    cache_session.add(new_cache)
+                cache_session.commit()
+                logger.info(f"📦 Cache WRITE: {origin}->{destination} {date_str} @ ${result_data['price']}")
+        except Exception as cache_err:
+            logger.warning(f"📦 Cache write error: {cache_err}")
+
+        return result_data
+    except Exception as e:
+        logger.error(f"SerpApi 异常: {e}")
+        return None
+
+
+def _search_range(
+    origin: str, destination: str, start_date: date, days: int,
+    cabin_class: str = "economy", adults: int = 1, children: int = 0,
+    max_stops: Optional[int] = None,
+    departure_time_min: Optional[str] = None, departure_time_max: Optional[str] = None,
+    sort_strategy: str = "best",
+    arrival_time_min: Optional[str] = None, arrival_time_max: Optional[str] = None,
+    airline_include: Optional[str] = None, excluded_airlines: Optional[str] = None,
+    return_date: Optional[date] = None,
+) -> List[dict]:
+    """对日期范围搜索（Mock 或 SerpApi）"""
+    if USE_MOCK_DATA:
+        raw = _generate_mock_heatmap(origin, destination, start_date, days, cabin_class)
+        results = []
+        for d in raw:
+            fd = None
+            if d["price"] is not None:
+                fd = _generate_mock_flight_detail(
+                    origin, destination, d["date"], d["price"],
+                    max_stops=max_stops, departure_time_min=departure_time_min,
+                    departure_time_max=departure_time_max, arrival_time_min=arrival_time_min,
+                    arrival_time_max=arrival_time_max, airline_include=airline_include,
+                )
+                fd = fd.model_dump()
+            results.append({"date": d["date"], "price": d["price"], "flight_data": fd})
+        return results
+    else:
+        results = []
+        for i in range(days):
+            current_date = start_date + timedelta(days=i)
+            date_str = current_date.isoformat()
+            flight_data = _search_serpapi_single_day(
+                origin, destination, current_date, cabin_class, adults, children,
+                max_stops, departure_time_min, departure_time_max, sort_strategy,
+                arrival_time_min, arrival_time_max, airline_include, excluded_airlines, return_date,
+            )
+            if flight_data:
+                results.append({"date": date_str, "price": flight_data["price"], "flight_data": flight_data})
+            else:
+                results.append({"date": date_str, "price": None, "flight_data": None})
+            if i < days - 1:
+                _time_module.sleep(1.5)
+        return results
+
+
+# ============================================================================
+# 通知服务
+# ============================================================================
+
+
+def _send_email_core(to_email: str, subject: str, html_content: str, sender_name: str = "SkyHunter Bot") -> bool:
+    """
+    核心邮件发送函数：根据 EMAIL_PROVIDER 切换 SMTP / Brevo 双通道。
+
+    Args:
+        to_email: 收件人邮箱
+        subject: 邮件主题
+        html_content: HTML 邮件正文
+        sender_name: 发件人显示名称
+
+    Returns:
+        是否发送成功
+    """
+    if not to_email:
+        logger.warning("📧 收件人邮箱为空，跳过发送")
+        return False
+
+    if EMAIL_PROVIDER == "brevo":
+        # ── Brevo HTTP API 通道 ──
+        import requests as _requests
+        if not BREVO_API_KEY:
+            logger.warning("📧 BREVO_API_KEY 未配置，跳过邮件通知")
+            return False
+        payload = {
+            "sender": {"name": sender_name, "email": EMAIL_SENDER},
+            "to": [{"email": to_email}],
+            "subject": subject,
+            "htmlContent": html_content,
+        }
+        try:
+            resp = _requests.post(
+                "https://api.brevo.com/v3/smtp/email", json=payload,
+                headers={"accept": "application/json", "api-key": BREVO_API_KEY, "content-type": "application/json"},
+                timeout=10,
+            )
+            if resp.status_code == 201:
+                logger.info(f"📧 [Brevo] 邮件已发送至 {to_email}")
+                return True
+            else:
+                logger.error(f"📧 [Brevo] 发送失败: HTTP {resp.status_code} - {resp.text}")
+                return False
+        except Exception as e:
+            logger.error(f"❌ [Brevo] 邮件网络错误: {e}")
+            return False
+    else:
+        # ── 原生 SMTP 通道（默认，适用于 QQ 邮箱等免费邮箱） ──
+        if not EMAIL_PASSWORD:
+            logger.warning("📧 EMAIL_PASSWORD 未配置，跳过 SMTP 邮件发送")
+            return False
+        msg = MIMEMultipart("alternative")
+        msg["From"] = f"{sender_name} <{EMAIL_SENDER}>"
+        msg["To"] = to_email
+        msg["Subject"] = subject
+        msg.attach(MIMEText(html_content, "html", "utf-8"))
+        try:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=15) as server:
+                server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+                server.sendmail(EMAIL_SENDER, [to_email], msg.as_string())
+            logger.info(f"📧 [SMTP] 邮件已发送至 {to_email} (via {SMTP_HOST})")
+            return True
+        except smtplib.SMTPAuthenticationError as e:
+            logger.error(f"❌ [SMTP] 认证失败（请检查 EMAIL_SENDER / EMAIL_PASSWORD）: {e}")
+            return False
+        except smtplib.SMTPException as e:
+            logger.error(f"❌ [SMTP] 发送异常: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"❌ [SMTP] 网络错误: {e}")
+            return False
+
+
+def send_alert_email(
+    to_email: str, origin: str, destination: str, price: float,
+    target_price: float, departure_date: str, link: str = "#",
+    adults: int = 1, children: int = 0,
+    airline: Optional[str] = None, flight_number: Optional[str] = None,
+    monitor_id: Optional[int] = None,
+) -> bool:
+    """
+    发送降价提醒邮件（支持多人价格与航司信息，通过 _send_email_core 统一派发）
+    若 API_BASE_URL 已配置且传入 monitor_id，邮件中的链接将使用追踪 URL 以统计点击。
+    """
+    if not to_email:
+        return False
+    # 优先使用追踪链接（便于统计点击转化）
+    final_link = link
+    if API_BASE_URL and monitor_id and link and link != "#":
+        final_link = f"{API_BASE_URL}/api/v1/track/{monitor_id}"
+    total_pax = adults + children
+    per_person = (price / total_pax) if total_pax > 0 else price
+    target_per_person = (target_price / total_pax) if total_pax > 0 else target_price
+    savings = target_price - price
+    savings_pct = (savings / target_price) * 100 if target_price > 0 else 0
+    savings_per_person = target_per_person - per_person
+    total_savings = savings  # 共省
+
+    # 多人时显示「全程总价 (X成人)」「人均」「目标人均」「人均节省」「共省」
+    if total_pax > 1:
+        price_label = f"全程总价 ({adults}成人)"
+        if children > 0:
+            price_label = f"全程总价 ({adults}成人{children}童)"
+        price_line = f"<div style=\"font-size: 14px; color: #558B2F;\">{price_label}</div><div style=\"font-size: 56px; color: #00C853; font-weight: 800; margin: 10px 0;\">${price:.2f}</div><div style=\"color: #90A4AE; font-size: 14px;\">您的目标人均价: ${target_per_person:.2f}</div><div style=\"font-size: 13px; color: #558B2F; margin-top: 8px;\">{adults}成人 | 人均 ${per_person:.2f} | 目标人均 ${target_per_person:.2f}</div>"
+        savings_line = f"<div style=\"background: #00C853; color: white; padding: 8px 16px; border-radius: 8px; font-size: 14px; font-weight: bold; margin-top: 12px;\">🔥 人均节省 ${savings_per_person:.2f}, 共省 ${total_savings:.2f} ({savings_pct:.0f}%)</div>" if savings > 0 else ""
+    else:
+        price_line = f"<div style=\"font-size: 12px; color: #558B2F; font-weight: bold;\">CURRENT LOWEST PRICE</div><div style=\"font-size: 56px; color: #00C853; font-weight: 800; margin: 10px 0;\">${price:.2f}</div><div style=\"color: #90A4AE; font-size: 14px; text-decoration: line-through;\">Your target: ${target_price:.2f}</div>"
+        savings_line = f"<div style='background: #00C853; color: white; padding: 6px 16px; border-radius: 50px; font-size: 14px; font-weight: bold; display: inline-block; margin-top: 10px;'>🔥 Save ${savings:.2f} ({savings_pct:.0f}%)</div>" if savings > 0 else ""
+
+    airline_block = ""
+    if airline or flight_number:
+        airline_block = f"<div style=\"background: #E3F2FD; padding: 8px 16px; border-radius: 8px; margin-bottom: 20px; font-size: 14px;\">✈️ 承运航司: {airline or '—'} {(' · ' + flight_number) if flight_number else ''}</div>"
+
+    html_content = f"""
+    <html><body style="font-family: -apple-system, sans-serif; background-color: #f4f7f6; margin: 0; padding: 0;">
+    <div style="max-width: 600px; margin: 30px auto; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 20px rgba(0,0,0,0.08);">
+        <div style="background: linear-gradient(135deg, #1E88E5 0%, #1565C0 100%); color: #fff; padding: 30px 20px; text-align: center;">
+            <h1 style="margin: 0; font-size: 24px;">✈️ 航班降价提醒</h1>
+            <p style="margin-top: 10px; opacity: 0.9;">SkyHunter 为您发现符合预算的航班</p>
+        </div>
+        <div style="padding: 40px 30px; text-align: center;">
+            <div style="font-size: 24px; font-weight: bold; color: #37474F; margin-bottom: 20px;">{origin} ➝ {destination}</div>
+            <div style="background: #ECEFF1; padding: 8px 20px; border-radius: 8px; display: inline-block; margin-bottom: 20px;">📅 出发日期: {departure_date}</div>
+            {airline_block}
+            <div style="background: #F1F8E9; border: 2px solid #00C853; border-radius: 12px; padding: 25px; margin-bottom: 30px;">
+                {price_line}
+                {savings_line}
+            </div>
+            <p style="font-size: 13px; color: #546E7A; margin-bottom: 20px;">SkyHunter 已为您监控到符合预算的机票，价格随时可能变动，建议尽快确认。</p>
+            <a href="{final_link}" style="background: #1E88E5; color: #fff; text-decoration: none; padding: 16px 45px; border-radius: 50px; font-weight: bold; font-size: 18px; display: inline-block;">立即查看详情 →</a>
+            <p style="font-size: 12px; color: #90A4AE; margin-top: 20px;">请自行前往 Google Flights 或航司官网完成购买。本通知仅提示价格变化，SkyHunter 不参与任何购票交易。</p>
+        </div>
+        <div style="background: #CFD8DC; padding: 15px; text-align: center; color: #546E7A; font-size: 12px;">SkyHunter 自动监控服务，如需退订请回复本邮件</div>
+    </div></body></html>
+    """
+    subject = f"✈️ 航班降价提醒 {origin} → {destination} 现价 ${price:.2f}"
+    return _send_email_core(to_email, subject, html_content, sender_name="SkyHunter Bot")
+
+
+def send_reset_code_email(to_email: str, code: str) -> bool:
+    """
+    发送密码重置验证码邮件（通过 _send_email_core 统一派发）
+
+    Args:
+        to_email: 收件人邮箱
+        code: 6位数字验证码
+
+    Returns:
+        是否发送成功
+    """
+    if not to_email:
+        return False
+    html_content = f"""
+    <html><body style="font-family: -apple-system, sans-serif; background-color: #0a0a0b; margin: 0; padding: 0;">
+    <div style="max-width: 500px; margin: 30px auto; background: #18181b; border-radius: 16px; overflow: hidden; border: 1px solid rgba(0,255,0,0.3);">
+        <div style="background: linear-gradient(135deg, #09090b 0%, #18181b 100%); color: #00FF00; padding: 30px 20px; text-align: center; border-bottom: 1px solid rgba(0,255,0,0.2);">
+            <h1 style="margin: 0; font-size: 22px; font-family: 'Courier New', monospace; letter-spacing: 4px;">🔐 PASSWORD RESET</h1>
+            <p style="margin-top: 8px; color: #a1a1aa; font-size: 12px; letter-spacing: 2px;">SKYHUNTER PRO SECURITY</p>
+        </div>
+        <div style="padding: 40px 30px; text-align: center;">
+            <p style="color: #a1a1aa; font-size: 14px; margin-bottom: 24px;">Use the verification code below to reset your password:</p>
+            <div style="background: #09090b; border: 2px solid #00FF00; border-radius: 12px; padding: 20px; margin-bottom: 24px; display: inline-block;">
+                <div style="font-size: 42px; color: #00FF00; font-weight: 800; letter-spacing: 12px; font-family: 'Courier New', monospace;">{code}</div>
+            </div>
+            <p style="color: #666; font-size: 12px;">This code will expire in <strong style="color: #FFD700;">15 minutes</strong>.</p>
+            <p style="color: #555; font-size: 11px; margin-top: 16px;">If you didn't request this, please ignore this email.</p>
+        </div>
+        <div style="background: #09090b; padding: 15px; text-align: center; color: #333; font-size: 11px; border-top: 1px solid rgba(0,255,0,0.1);">SkyHunter Pro · Secure Authentication System</div>
+    </div></body></html>
+    """
+    subject = f"🔐 SkyHunter Password Reset Code: {code}"
+    return _send_email_core(to_email, subject, html_content, sender_name="SkyHunter Security")
+
+
+# ============================================================================
+# 后台调度器
+# ============================================================================
+
+_scheduler = None
+
+
+def _parse_iso_datetime(value):
+    """
+    兼容 SQLModel / PostgreSQL 可能返回 datetime 或 ISO 字符串两种形式。
+    """
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_iso_date(value):
+    """
+    兼容 SQLModel / PostgreSQL 可能返回 date / datetime / ISO 字符串三种形式。
+    """
+    if not value:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _stringify_temporal_value(value):
+    """统一将 date/datetime 转成 ISO 字符串，避免响应序列化告警。"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
+
+
+def _monitor_response_from_task(task: MonitorTask) -> MonitorResponse:
+    """将数据库任务对象安全映射为 API 响应。"""
+    payload = task.model_dump()
+    for field_name in ("start_date", "return_date", "last_checked_at", "created_at", "end_date", "next_run_time"):
+        payload[field_name] = _stringify_temporal_value(payload.get(field_name))
+    return MonitorResponse(**payload)
+
+
+def _process_active_monitors():
+    """
+    Phase 2: Per-Task 独立调度心跳（每 5 分钟执行一次）
+
+    逻辑：
+    1. 查询所有 active + 未删除的任务
+    2. 对每个任务检查 end_date → 过期则标记 expired
+    3. 检查 next_run_time → 未到时间则跳过
+    4. 执行价格检查 → 更新 next_run_time
+    """
+    now = datetime.utcnow()
+    now_iso = now.isoformat()
+    logger.info(f"\n💓 [Scheduler] 心跳 {now.strftime('%H:%M:%S')} UTC (5min per-task)")
+    executed_count = 0
+    try:
+        with Session(engine) as session:
+            statement = select(MonitorTask).where(
+                MonitorTask.status == "active",
+                MonitorTask.is_deleted == False,
+            )
+            tasks = session.exec(statement).all()
+            if not tasks:
+                logger.info("  ℹ️ 无活跃任务")
+                return
+            logger.info(f"  📋 发现 {len(tasks)} 个活跃任务，开始逐个检查...")
+
+            for task in tasks:
+                try:
+                    # ── Step 1: 检查 end_date 过期 ──
+                    if task.end_date:
+                        end_dt = _parse_iso_datetime(task.end_date)
+                        if end_dt and now > end_dt:
+                            task.status = "expired"
+                            session.add(task)
+                            session.commit()
+                            logger.info(f"  ⏰ 任务 #{task.id} 已过期 (end_date={task.end_date})")
+                            continue
+                    else:
+                        # 兼容旧任务（无 end_date）：用 start_date + days 判断
+                        task_start = _parse_iso_date(task.start_date)
+                        if task_start:
+                            task_end = task_start + timedelta(days=task.days)
+                            if date.today() > task_end:
+                                task.status = "expired"
+                                session.add(task)
+                                session.commit()
+                                logger.info(f"  ⏰ 任务 #{task.id} 已过期 (legacy: start+days)")
+                                continue
+
+                    # ── Step 2: 检查 next_run_time（是否到达执行时间）──
+                    if task.next_run_time:
+                        next_run = _parse_iso_datetime(task.next_run_time)
+                        if next_run and now < next_run:
+                            continue  # 未到执行时间，跳过
+
+                    # ── Step 3: 执行价格检查 ──
+                    logger.info(f"  ✈️ 执行任务 #{task.id}: {task.origin}->{task.destination} (间隔={task.interval_minutes}m)")
+                    executed_count += 1
+
+                    check_date = _parse_iso_date(task.start_date) or (date.today() + timedelta(days=1))
+
+                    return_date_obj = None
+                    if task.trip_type == "round_trip" and task.return_date:
+                        return_date_obj = _parse_iso_date(task.return_date)
+
+                    if USE_MOCK_DATA:
+                        mock_data = _generate_mock_heatmap(task.origin, task.destination, check_date, 1, task.cabin_class)
+                        if mock_data and mock_data[0]["price"] is not None:
+                            current_price = mock_data[0]["price"]
+                            if return_date_obj:
+                                return_mock = _generate_mock_heatmap(task.destination, task.origin, return_date_obj, 1, task.cabin_class)
+                                if return_mock and return_mock[0]["price"] is not None:
+                                    current_price += return_mock[0]["price"]
+                            mock_flight = _generate_mock_flight_detail(
+                                task.origin, task.destination, task.start_date, current_price,
+                                max_stops=task.max_stops, departure_time_min=task.departure_time_min,
+                                departure_time_max=task.departure_time_max, arrival_time_min=task.arrival_time_min,
+                                arrival_time_max=task.arrival_time_max, airline_include=task.airline_include,
+                            )
+                            flight_info = mock_flight.model_dump()
+                        else:
+                            current_price = None
+                            flight_info = None
+                    else:
+                        result = _search_serpapi_single_day(
+                            task.origin, task.destination, check_date, task.cabin_class,
+                            task.adults, task.children, task.max_stops,
+                            task.departure_time_min, task.departure_time_max,
+                            task.sort_strategy or "best", task.arrival_time_min,
+                            task.arrival_time_max, task.airline_include, task.excluded_airlines,
+                            return_date_obj,
+                        )
+                        if result:
+                            current_price = result["price"]
+                            flight_info = result
+                        else:
+                            current_price = None
+                            flight_info = None
+
+                    task.last_checked_at = now_iso
+                    if current_price is not None:
+                        task.current_price = current_price
+                        if task.lowest_price is None or current_price < task.lowest_price:
+                            task.lowest_price = current_price
+                            task.lowest_price_date = check_date.isoformat()
+                            if flight_info:
+                                task.booking_link = flight_info.get("booking_link")
+                                task.airline = flight_info.get("airline")
+                                task.flight_number = flight_info.get("flight_number")
+                                task.baggage_info = flight_info.get("baggage_info")
+                        ph = PriceHistory(
+                            monitor_id=task.id, price=current_price, checked_at=now_iso,
+                            booking_link=flight_info.get("booking_link") if flight_info else None,
+                        )
+                        session.add(ph)
+                        if task.target_price and current_price <= task.target_price:
+                            task.status = "found"
+                            if task.notification_email:
+                                send_alert_email(
+                                    to_email=task.notification_email, origin=task.origin,
+                                    destination=task.destination, price=current_price,
+                                    target_price=task.target_price, departure_date=task.start_date,
+                                    link=task.booking_link or "#",
+                                    adults=task.adults, children=task.children,
+                                    airline=flight_info.get("airline") if flight_info else None,
+                                    flight_number=flight_info.get("flight_number") if flight_info else None,
+                                    monitor_id=task.id,
+                                )
+
+                    # ── Step 4: 更新 next_run_time ──
+                    interval = task.interval_minutes or 240
+                    task.next_run_time = (now + timedelta(minutes=interval)).isoformat()
+
+                    session.add(task)
+                    session.commit()
+
+                    if not USE_MOCK_DATA:
+                        _time_module.sleep(2)
+
+                except Exception as e:
+                    logger.error(f"    ❌ 任务 #{task.id} 异常: {e}")
+                    continue
+
+        logger.info(f"  ✅ 心跳完成: 执行了 {executed_count} 个任务")
+    except Exception as e:
+        logger.error(f"❌ 调度器致命错误: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+# Phase 2: 调度器心跳间隔从 SCHEDULER_INTERVAL_HOURS 改为 5 分钟
+SCHEDULER_HEARTBEAT_MINUTES: int = 5
+
+
+def start_scheduler():
+    global _scheduler
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+    except ImportError:
+        logger.error("❌ apscheduler 未安装")
+        return
+    if _scheduler is not None:
+        return
+    _scheduler = BackgroundScheduler()
+    _scheduler.add_job(
+        func=_process_active_monitors, trigger="interval",
+        minutes=SCHEDULER_HEARTBEAT_MINUTES, id="process_monitors",
+        name=f"每{SCHEDULER_HEARTBEAT_MINUTES}分钟心跳 (per-task 独立调度)",
+        replace_existing=True, max_instances=1, misfire_grace_time=600,
+    )
+    _scheduler.start()
+    logger.info(f"⏰ Phase 2 调度器已启动: 每 {SCHEDULER_HEARTBEAT_MINUTES} 分钟心跳，per-task 独立频率")
+    logger.info("🔍 启动后立即执行首次检查...")
+    _process_active_monitors()
+
+
+def stop_scheduler():
+    global _scheduler
+    if _scheduler is not None:
+        _scheduler.shutdown()
+        _scheduler = None
+        logger.info("🛑 调度器已停止")
+
+
+# ============================================================================
+# FastAPI 应用实例
+# ============================================================================
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("=" * 60)
+    logger.info(f"🚀 SkyHunter Pro API v{APP_VERSION} Starting...")
+    logger.info(f"   Mock Mode: {'ON' if USE_MOCK_DATA else 'OFF'}")
+    logger.info(f"   Auth: JWT (HS256, {JWT_EXPIRE_HOURS}h expiry)")
+    logger.info(f"   Email: {EMAIL_PROVIDER.upper()} ({'Brevo API' if EMAIL_PROVIDER == 'brevo' else SMTP_HOST + ':' + str(SMTP_PORT)})")
+    logger.info(f"   Scheduler: Every {SCHEDULER_HEARTBEAT_MINUTES} minutes heartbeat (per-task)")
+    logger.info(f"   Database: {'SQLite (' + DATABASE_FILE + ')' if _is_sqlite else 'PostgreSQL (Supabase)'}")
+    logger.info(f"   DB Mode: {DB_MODE.upper()}")
+    logger.info("=" * 60)
+
+    # ── 数据库初始化 ──
+    if _is_sqlite:
+        # SQLite: create_all 创建新表 + 手动 ALTER TABLE 添加缺失列
+        try:
+            SQLModel.metadata.create_all(engine)
+            logger.info("✅ SQLite 数据库表已创建/确认")
+        except Exception as create_err:
+            # 已有数据库中索引可能已存在，忽略 "index already exists"
+            if "already exists" not in str(create_err).lower():
+                raise
+            logger.warning(f"⚠️ create_all 跳过（索引已存在）: {create_err}")
+            logger.info("✅ SQLite 数据库表已就绪")
+
+        # SQLite 迁移：自动添加缺失列（SQLite 不支持 ADD COLUMN IF NOT EXISTS，需先检查）
+        from sqlalchemy import inspect as sa_inspect, text as sa_text
+        try:
+            with engine.begin() as conn:
+                inspector = sa_inspect(conn)
+                for table in SQLModel.metadata.sorted_tables:
+                    try:
+                        existing_columns = {col["name"] for col in inspector.get_columns(table.name)}
+                    except Exception:
+                        # 表不存在（create_all 应已处理），跳过
+                        continue
+
+                    for column in table.columns:
+                        if column.name not in existing_columns:
+                            col_type = column.type.compile(dialect=engine.dialect)
+                            default_clause = ""
+                            if column.default is not None and hasattr(column.default, "arg"):
+                                default_val = column.default.arg
+                                if not callable(default_val):
+                                    if isinstance(default_val, bool):
+                                        default_clause = f" DEFAULT {1 if default_val else 0}"
+                                    elif isinstance(default_val, (int, float)):
+                                        default_clause = f" DEFAULT {default_val}"
+                                    elif isinstance(default_val, str):
+                                        safe_val = default_val.replace("'", "''")
+                                        default_clause = f" DEFAULT '{safe_val}'"
+                            elif column.nullable:
+                                default_clause = " DEFAULT NULL"
+                            alter_sql = f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {col_type}{default_clause}'
+                            try:
+                                conn.execute(sa_text(alter_sql))
+                                logger.info(f"  ✅ SQLite 迁移: 添加列 {table.name}.{column.name} ({col_type})")
+                            except Exception as col_err:
+                                # SQLite 列已存在时会报 "duplicate column name"，安全忽略
+                                if "duplicate column" not in str(col_err).lower():
+                                    logger.warning(f"  ⚠️ SQLite 迁移失败 {table.name}.{column.name}: {col_err}")
+            logger.info("✅ SQLite 数据库迁移完成")
+        except Exception as migrate_err:
+            logger.error(f"❌ SQLite 迁移异常: {migrate_err}")
+            import traceback
+            traceback.print_exc()
+    else:
+        # PostgreSQL: 兼容已有表，自动添加缺失列和索引
+        from sqlalchemy import inspect as sa_inspect, text as sa_text
+        from sqlalchemy.schema import CreateTable
+
+        try:
+            with engine.begin() as conn:
+                inspector = sa_inspect(conn)
+
+                for table in SQLModel.metadata.sorted_tables:
+                    # Step 1: CREATE TABLE IF NOT EXISTS
+                    try:
+                        create_ddl = CreateTable(table).compile(dialect=engine.dialect)
+                        create_sql = str(create_ddl).replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
+                        conn.execute(sa_text(create_sql))
+                        logger.info(f"  ✅ 表 {table.name} 已就绪")
+                    except Exception as tbl_err:
+                        logger.warning(f"  ⚠️ 创建表 {table.name} 异常（可能已存在）: {tbl_err}")
+
+                    # Step 2: ALTER TABLE ADD COLUMN IF NOT EXISTS
+                    try:
+                        existing_columns = {col["name"] for col in inspector.get_columns(table.name)}
+                    except Exception:
+                        existing_columns = set()
+
+                    for column in table.columns:
+                        if column.name not in existing_columns and existing_columns:
+                            col_type = column.type.compile(dialect=engine.dialect)
+                            default_clause = ""
+                            if column.default is not None and hasattr(column.default, "arg"):
+                                default_val = column.default.arg
+                                if not callable(default_val):
+                                    if isinstance(default_val, bool):
+                                        default_clause = f" DEFAULT {'TRUE' if default_val else 'FALSE'}"
+                                    elif isinstance(default_val, (int, float)):
+                                        default_clause = f" DEFAULT {default_val}"
+                                    elif isinstance(default_val, str):
+                                        safe_val = default_val.replace("'", "''")
+                                        default_clause = f" DEFAULT '{safe_val}'"
+                            elif column.nullable:
+                                default_clause = " DEFAULT NULL"
+                            alter_sql = f'ALTER TABLE "{table.name}" ADD COLUMN IF NOT EXISTS "{column.name}" {col_type}{default_clause}'
+                            try:
+                                conn.execute(sa_text(alter_sql))
+                                logger.info(f"  ✅ 添加列: {table.name}.{column.name} ({col_type})")
+                            except Exception as col_err:
+                                logger.warning(f"  ⚠️ 添加列失败 {table.name}.{column.name}: {col_err}")
+
+                    # Step 3: CREATE INDEX IF NOT EXISTS
+                    for index in table.indexes:
+                        if index.name:
+                            idx_cols = ", ".join(f'"{c.name}"' for c in index.columns)
+                            unique_kw = "UNIQUE " if index.unique else ""
+                            create_idx_sql = f'CREATE {unique_kw}INDEX IF NOT EXISTS "{index.name}" ON "{table.name}" ({idx_cols})'
+                            try:
+                                conn.execute(sa_text(create_idx_sql))
+                            except Exception:
+                                pass
+
+            logger.info("✅ PostgreSQL 数据库表已初始化")
+
+        except Exception as db_init_err:
+            logger.error(f"❌ 数据库初始化失败: {db_init_err}")
+            import traceback
+            traceback.print_exc()
+            raise
+
+    start_scheduler()
+    yield
+    stop_scheduler()
+    logger.info("🛑 SkyHunter Pro API Stopped")
+
+
+app = FastAPI(
+    title="SkyHunter Pro API",
+    description=APP_DESCRIPTION,
+    version=APP_VERSION,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=lifespan,
+)
+
+# Sentry 异常追踪（可选，生产环境配置 SENTRY_DSN 后自动启用）
+SENTRY_DSN: str = os.getenv("SENTRY_DSN", "").strip()
+if SENTRY_DSN:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            integrations=[FastApiIntegration()],
+            traces_sample_rate=0.1,
+            environment="production" if not USE_MOCK_DATA else "development",
+        )
+        logger.info("📡 Sentry 异常追踪已启用")
+    except Exception as e:
+        logger.warning(f"⚠️ Sentry 初始化失败: {e}")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
+
+
+# ============================================================================
+# 全局异常处理：确保 401/403 等错误响应也带 CORS 头
+# ============================================================================
+
+@app.exception_handler(HTTPException)
+async def cors_http_exception_handler(request: StarletteRequest, exc: HTTPException):
+    """
+    自定义 HTTPException 处理器：确保所有错误响应（尤其是 401）
+    都包含正确的 CORS 头，防止浏览器因 CORS 策略阻止前端读取 401 状态。
+    """
+    headers = {}
+    origin = request.headers.get("origin", "")
+    if origin:
+        if "*" in CORS_ALLOWED_ORIGINS or origin in CORS_ALLOWED_ORIGINS:
+            headers["Access-Control-Allow-Origin"] = origin if "*" not in CORS_ALLOWED_ORIGINS else "*"
+            headers["Access-Control-Allow-Credentials"] = "true"
+            headers["Access-Control-Allow-Methods"] = "*"
+            headers["Access-Control-Allow-Headers"] = "*"
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=headers,
+    )
+
+
+# ============================================================================
+# API 端点：健康检查
+# ============================================================================
+
+
+@app.get("/", tags=["health"])
+async def root():
+    return {"status": "running", "service": "SkyHunter Pro API", "version": APP_VERSION, "mock_mode": USE_MOCK_DATA}
+
+
+@app.get("/health", tags=["health"])
+async def health_check():
+    return {
+        "status": "healthy", "service": "SkyHunter Pro API", "version": APP_VERSION,
+        "mock_mode": USE_MOCK_DATA, "serpapi_configured": bool(SERPAPI_API_KEY),
+        "brevo_configured": bool(BREVO_API_KEY),
+        "scheduler_running": _scheduler is not None and _scheduler.running if _scheduler else False,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+
+@app.get("/api/v1/track/{monitor_id}", tags=["track"], summary="预订链接追踪重定向")
+async def track_booking_click(monitor_id: int):
+    """
+    记录预订链接点击并重定向到 Google Flights / 航司官网。
+    邮件中的「立即查看详情」应使用此链接，便于统计点击转化。
+    """
+    with Session(engine) as session:
+        task = session.get(MonitorTask, monitor_id)
+        if not task:
+            return RedirectResponse(url="https://www.google.com/flights", status_code=302)
+        if not task.booking_link or task.booking_link == "#":
+            return RedirectResponse(url="https://www.google.com/flights", status_code=302)
+        task.click_count = (task.click_count or 0) + 1
+        task.last_clicked_at = datetime.utcnow().isoformat()
+        session.add(task)
+        session.commit()
+        logger.info(f"📊 监控 #{monitor_id} 预订链接点击 +1，累计 {task.click_count}")
+        return RedirectResponse(url=task.booking_link, status_code=302)
+
+
+# ============================================================================
+# API 端点：用户认证
+# ============================================================================
+
+
+@app.post("/api/v1/auth/signup", response_model=TokenResponse, status_code=201, summary="用户注册", tags=["auth"])
+async def signup(request: SignupRequest):
+    """
+    注册新用户。
+
+    成功后直接返回 JWT Token，用户无需再次登录。
+    """
+    email = request.email.strip().lower()
+
+    # 验证邮箱格式（简单检查）
+    if "@" not in email or "." not in email:
+        raise HTTPException(status_code=400, detail="Invalid email format")
+
+    with Session(engine) as session:
+        # 检查邮箱是否已存在
+        existing = session.exec(select(User).where(User.email == email)).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="Email already registered")
+
+        # 检查手机号是否已存在（如果提供了）
+        if request.phone and request.phone.strip():
+            phone_existing = session.exec(select(User).where(User.phone == request.phone.strip())).first()
+            if phone_existing:
+                raise HTTPException(status_code=409, detail="Phone number already registered")
+
+        # 创建用户
+        user = User(
+            email=email,
+            hashed_password=hash_password(request.password),
+            full_name=request.full_name,
+            phone=request.phone.strip() if request.phone else None,
+            role="user",
+            created_at=datetime.utcnow().isoformat(),
+        )
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        _record_transaction(
+            user_id=user.id,
+            transaction_type="system_adjustment",
+            amount=user.credits,
+            credits_before=0,
+            credits_after=user.credits,
+            description="Signup bonus credits",
+            reference_type="signup",
+            reference_id=str(user.id),
+        )
+
+        logger.info(f"🆕 新用户注册: {email} (ID: {user.id})")
+
+        # 直接返回 Token
+        access_token = create_access_token(data={"sub": user.email, "user_id": user.id, "role": user.role})
+        return TokenResponse(
+            access_token=access_token,
+            token_type="bearer",
+            user_id=user.id,
+            email=user.email,
+            full_name=user.full_name,
+            role=user.role,
+            credits=user.credits,
+        )
+
+
+@app.post("/api/v1/auth/token", response_model=TokenResponse, summary="用户登录", tags=["auth"])
+async def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    http_request: StarletteRequest = None,
+):
+    """
+    用户登录，返回 JWT Token。
+
+    使用 OAuth2 标准表单格式 (username=email, password=password)。
+    """
+    email = form_data.username.strip().lower()
+    rate_limit_key = _get_rate_limit_key(email, http_request)
+
+    login_limited, retry_after = _is_rate_limited(
+        _login_attempts,
+        rate_limit_key,
+        LOGIN_MAX_ATTEMPTS,
+        LOGIN_WINDOW_SECONDS,
+    )
+    if login_limited:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many login attempts. Please try again in {retry_after} seconds.",
+        )
+
+    with Session(engine) as session:
+        user = session.exec(select(User).where(User.email == email)).first()
+        if not user:
+            _record_rate_limit_attempt(_login_attempts, rate_limit_key)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        if not verify_password(form_data.password, user.hashed_password):
+            _record_rate_limit_attempt(_login_attempts, rate_limit_key)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        _clear_rate_limit_attempts(_login_attempts, rate_limit_key)
+        logger.info(f"🔐 用户登录: {email} (ID: {user.id})")
+
+        access_token = create_access_token(data={"sub": user.email, "user_id": user.id, "role": user.role})
+        return TokenResponse(
+            access_token=access_token,
+            token_type="bearer",
+            user_id=user.id,
+            email=user.email,
+            full_name=user.full_name,
+            role=user.role,
+            credits=user.credits,
+        )
+
+
+@app.get("/api/v1/users/me", response_model=UserResponse, summary="获取当前用户信息", tags=["auth"])
+async def get_me(current_user: User = Depends(get_current_user)):
+    """获取当前已认证用户的信息"""
+    # 重新查询以获取最新 credits
+    with Session(engine) as session:
+        fresh_user = session.get(User, current_user.id)
+        if not fresh_user:
+            raise HTTPException(status_code=404, detail="User not found")
+        return UserResponse(
+            id=fresh_user.id,
+            email=fresh_user.email,
+            phone=fresh_user.phone,
+            full_name=fresh_user.full_name,
+            role=fresh_user.role,
+            credits=fresh_user.credits,
+            created_at=fresh_user.created_at,
+        )
+
+
+@app.get(
+    "/api/v1/users/transactions",
+    response_model=List[TransactionHistoryResponse],
+    summary="获取当前用户积分流水",
+    tags=["auth"],
+)
+async def get_my_transactions(
+    limit: int = 50,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+):
+    """按时间倒序返回当前用户的积分流水。"""
+    safe_limit = max(1, min(limit, 200))
+    safe_offset = max(0, offset)
+
+    with Session(engine) as session:
+        records = session.exec(
+            select(TransactionHistory)
+            .where(TransactionHistory.user_id == current_user.id)
+            .order_by(TransactionHistory.id.desc())
+            .offset(safe_offset)
+            .limit(safe_limit)
+        ).all()
+        return [TransactionHistoryResponse(**record.model_dump()) for record in records]
+
+
+class ForgotPasswordRequest(BaseModel):
+    """忘记密码请求"""
+    email: str = Field(..., description="注册邮箱地址")
+
+
+
+@app.post("/api/v1/auth/forgot-password", summary="请求密码重置验证码", tags=["auth"])
+async def forgot_password(request: ForgotPasswordRequest, http_request: StarletteRequest):
+    """
+    发送密码重置验证码到用户邮箱。
+
+    即使邮箱不存在也返回成功（防止邮箱枚举攻击）。
+    验证码有效期 15 分钟。
+    """
+    email = request.email.strip().lower()
+    rate_limit_key = _get_rate_limit_key(email, http_request)
+
+    # 统一返回消息（防止邮箱枚举）
+    success_msg = {"message": "If the email is registered, a reset code has been sent."}
+
+    forgot_limited, retry_after = _is_rate_limited(
+        _forgot_password_attempts,
+        rate_limit_key,
+        FORGOT_PASSWORD_MAX_REQUESTS,
+        FORGOT_PASSWORD_WINDOW_SECONDS,
+    )
+    if forgot_limited:
+        logger.warning(f"🔐 忘记密码请求已限流: {email} (retry_after={retry_after}s)")
+        return success_msg
+    _record_rate_limit_attempt(_forgot_password_attempts, rate_limit_key)
+
+    with Session(engine) as session:
+        # 检查用户是否存在
+        user = session.exec(select(User).where(User.email == email)).first()
+        if not user:
+            logger.info(f"🔐 忘记密码请求: {email} (用户不存在，静默返回)")
+            return success_msg
+
+        # 使该邮箱之前未使用的验证码全部失效
+        old_tokens = session.exec(
+            select(PasswordReset).where(
+                PasswordReset.email == email,
+                PasswordReset.used == False,
+            )
+        ).all()
+        for old in old_tokens:
+            old.used = True
+            session.add(old)
+
+        # 生成新验证码
+        code = generate_reset_token()
+        expires_at = (datetime.utcnow() + timedelta(minutes=15)).isoformat()
+
+        reset_record = PasswordReset(
+            email=email,
+            token=code,
+            expires_at=expires_at,
+            used=False,
+        )
+        session.add(reset_record)
+        session.commit()
+
+        logger.info(f"🔐 密码重置码已生成: {email} (expires_in=15m)")
+
+        # 发送邮件（失败不影响返回）
+        send_reset_code_email(to_email=email, code=code)
+
+    return success_msg
+
+
+@app.post("/api/v1/auth/reset-password", summary="验证码重置密码", tags=["auth"])
+async def reset_password(request: ResetPasswordRequest, http_request: StarletteRequest):
+    """
+    使用验证码重置密码。
+
+    验证: token 存在、匹配邮箱、未过期、未使用。
+    成功后更新密码并标记 token 为已使用。
+    """
+    email = request.email.strip().lower()
+    token = request.token.strip()
+    rate_limit_key = _get_rate_limit_key(email, http_request)
+
+    reset_limited, retry_after = _is_rate_limited(
+        _reset_password_attempts,
+        rate_limit_key,
+        RESET_PASSWORD_MAX_ATTEMPTS,
+        RESET_PASSWORD_WINDOW_SECONDS,
+    )
+    if reset_limited:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many reset attempts. Please try again in {retry_after} seconds.",
+        )
+
+    with Session(engine) as session:
+        # 查找匹配的验证码记录
+        reset_record = session.exec(
+            select(PasswordReset).where(
+                PasswordReset.email == email,
+                PasswordReset.token == token,
+                PasswordReset.used == False,
+            )
+        ).first()
+
+        if not reset_record:
+            _record_rate_limit_attempt(_reset_password_attempts, rate_limit_key)
+            raise HTTPException(status_code=400, detail="Invalid or expired reset code")
+
+        # 检查是否过期
+        try:
+            expires_at = datetime.fromisoformat(reset_record.expires_at)
+            if datetime.utcnow() > expires_at:
+                reset_record.used = True
+                session.add(reset_record)
+                session.commit()
+                _record_rate_limit_attempt(_reset_password_attempts, rate_limit_key)
+                raise HTTPException(status_code=400, detail="Reset code has expired. Please request a new one.")
+        except ValueError:
+            _record_rate_limit_attempt(_reset_password_attempts, rate_limit_key)
+            raise HTTPException(status_code=400, detail="Invalid reset record")
+
+        # 查找用户
+        user = session.exec(select(User).where(User.email == email)).first()
+        if not user:
+            raise HTTPException(status_code=400, detail="User not found")
+
+        # 更新密码
+        user.hashed_password = hash_password(request.new_password)
+        session.add(user)
+
+        # 标记 token 为已使用
+        reset_record.used = True
+        session.add(reset_record)
+
+        session.commit()
+        _clear_rate_limit_attempts(_reset_password_attempts, rate_limit_key)
+        logger.info(f"🔐 密码已重置: {email}")
+
+    return {"message": "Password has been reset successfully. Please login with your new password."}
+
+
+
+@app.post("/api/v1/auth/change-password", summary="修改密码", tags=["auth"])
+async def change_password(request: ChangePasswordRequest, current_user: User = Depends(get_current_user)):
+    """
+    已登录用户修改密码。需提供当前密码验证。
+    """
+    if not verify_password(request.old_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if request.old_password == request.new_password:
+        raise HTTPException(status_code=400, detail="New password must be different from current password")
+
+    with Session(engine) as session:
+        user = session.get(User, current_user.id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        user.hashed_password = hash_password(request.new_password)
+        session.add(user)
+        session.commit()
+        logger.info(f"🔐 用户 #{current_user.id} 已修改密码")
+    return {"message": "Password has been updated successfully."}
+
+
+class TopupRequest(BaseModel):
+    """充值请求"""
+    amount: int = Field(default=50, ge=1, le=9999, description="充值积分数量")
+
+
+class TopupResponse(BaseModel):
+    """充值响应"""
+    message: str
+    credits_added: int
+    credits_total: int
+
+
+def _record_transaction(
+    user_id: int,
+    transaction_type: str,
+    amount: int,
+    credits_before: int,
+    credits_after: int,
+    description: str,
+    reference_type: Optional[str] = None,
+    reference_id: Optional[str] = None,
+    operator_user_id: Optional[int] = None,
+) -> None:
+    """
+    记录积分流水。
+
+    这里使用独立事务，确保即使主业务已提交，也能尽量保留审计痕迹。
+    """
+    try:
+        with Session(engine) as session:
+            record = TransactionHistory(
+                user_id=user_id,
+                transaction_type=transaction_type,
+                amount=amount,
+                credits_before=credits_before,
+                credits_after=credits_after,
+                description=description,
+                reference_type=reference_type,
+                reference_id=reference_id,
+                operator_user_id=operator_user_id,
+            )
+            session.add(record)
+            session.commit()
+    except Exception as tx_err:
+        logger.error(
+            f"❌ Transaction history write failed for user #{user_id}: "
+            f"{tx_err} ({transaction_type}, amount={amount})"
+        )
+
+
+def _refund_user_credits(user_id: int, amount: int, reason: str) -> None:
+    """
+    最小补偿机制：在扣费后的关键失败场景下返还积分。
+    """
+    if amount <= 0:
+        return
+    try:
+        with Session(engine) as session:
+            user = session.get(User, user_id)
+            if not user:
+                logger.error(f"❌ Refund failed: user #{user_id} not found ({reason})")
+                return
+            credits_before = user.credits
+            user.credits += amount
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+            _record_transaction(
+                user_id=user_id,
+                transaction_type="refund",
+                amount=amount,
+                credits_before=credits_before,
+                credits_after=user.credits,
+                description=f"Refund for {reason}",
+                reference_type="refund_reason",
+                reference_id=reason,
+            )
+            logger.info(f"↩️ User #{user_id} 退款 {amount} 积分，原因: {reason}，余额: {user.credits}")
+    except Exception as refund_err:
+        logger.error(f"❌ Refund failed for user #{user_id}: {refund_err} ({reason})")
+
+
+@app.post("/api/v1/users/topup", response_model=TopupResponse, summary="充值积分（Mock）", tags=["auth"])
+async def topup_credits(request: TopupRequest = TopupRequest(), current_user: User = Depends(get_current_user)):
+    """
+    Mock 充值积分端点。
+
+    生产环境中应接入支付网关（Stripe / 支付宝等），此处直接增加积分。
+    """
+    with Session(engine) as session:
+        user = session.get(User, current_user.id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        credits_before = user.credits
+        user.credits += request.amount
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        _record_transaction(
+            user_id=user.id,
+            transaction_type="recharge",
+            amount=request.amount,
+            credits_before=credits_before,
+            credits_after=user.credits,
+            description="Mock credits topup",
+            reference_type="topup",
+            reference_id=str(request.amount),
+        )
+        logger.info(f"💰 User #{user.id} 充值 {request.amount} 积分，余额: {user.credits}")
+        return TopupResponse(
+            message=f"Successfully added {request.amount} credits",
+            credits_added=request.amount,
+            credits_total=user.credits,
+        )
+
+
+# ============================================================================
+# API 端点：一次性搜索（需要认证）
+# ============================================================================
+
+
+@app.post("/api/v1/search", response_model=SearchResponse, summary="30天热力图搜索", tags=["search"])
+async def search_flights(request: SearchRequest, current_user: User = Depends(get_current_user)):
+    """一次性航班价格热力图搜索（不存入数据库），需要登录。"""
+    search_id = str(uuid4())[:8]
+    origin = request.origin.upper()
+    destination = request.destination.upper()
+
+    if origin == destination:
+        raise HTTPException(status_code=400, detail="出发地和目的地不能相同")
+    try:
+        start_date_obj = date.fromisoformat(request.start_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"日期格式无效: '{request.start_date}'")
+    if start_date_obj < date.today():
+        raise HTTPException(status_code=400, detail="起始日期不能早于今天")
+
+    valid_cabins = ["economy", "premium_economy", "business", "first"]
+    if request.cabin_class not in valid_cabins:
+        raise HTTPException(status_code=400, detail=f"无效舱位: '{request.cabin_class}'")
+    valid_trip_types = ["one_way", "round_trip"]
+    if request.trip_type not in valid_trip_types:
+        raise HTTPException(status_code=400, detail=f"无效行程类型: '{request.trip_type}'")
+
+    return_date_obj = None
+    if request.trip_type == "round_trip":
+        if not request.return_date:
+            raise HTTPException(status_code=400, detail="往返航班必须指定返程日期")
+        try:
+            return_date_obj = date.fromisoformat(request.return_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"返程日期格式无效")
+        if return_date_obj <= start_date_obj:
+            raise HTTPException(status_code=400, detail="返程日期必须晚于出发日期")
+
+    # ── 积分检查 & 扣除：分级定价（单日 1 积分，多日 5 积分） ──
+    search_cost = 1 if request.days == 1 else 5
+    with Session(engine) as session:
+        user = session.get(User, current_user.id)
+        if not user or user.credits < search_cost:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=f"Insufficient credits. This search costs {search_cost} credit(s). You have {user.credits if user else 0}. Please top up.",
+            )
+        credits_before = user.credits
+        user.credits -= search_cost
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        _record_transaction(
+            user_id=user.id,
+            transaction_type="consumption",
+            amount=-search_cost,
+            credits_before=credits_before,
+            credits_after=user.credits,
+            description=f"Flight search charge ({origin}->{destination}, {request.days} day(s))",
+            reference_type="search",
+            reference_id=search_id,
+        )
+        logger.info(f"💳 User #{current_user.id} 搜索扣除 {search_cost} 积分，剩余: {user.credits}")
+
+    logger.info(f"🔍 [{search_id}] User #{current_user.id} 搜索: {origin}->{destination}")
+
+    try:
+        range_results = _search_range(
+            origin, destination, start_date_obj, request.days,
+            request.cabin_class, request.adults, request.children, request.max_stops,
+            request.departure_time_min, request.departure_time_max, request.sort_strategy,
+            request.arrival_time_min, request.arrival_time_max, request.airline_include,
+            request.excluded_airlines, return_date_obj,
+        )
+        raw_data = [{"date": r["date"], "price": r["price"]} for r in range_results]
+        data_source = "mock" if USE_MOCK_DATA else "serpapi"
+
+        return_raw_data = []
+        if request.trip_type == "round_trip" and return_date_obj:
+            return_range_results = _search_range(
+                destination, origin, return_date_obj, request.days,
+                request.cabin_class, request.adults, request.children, request.max_stops,
+                request.departure_time_min, request.departure_time_max, request.sort_strategy,
+                request.arrival_time_min, request.arrival_time_max, request.airline_include,
+                request.excluded_airlines, None,
+            )
+            return_raw_data = [{"date": r["date"], "price": r["price"]} for r in return_range_results]
+    except Exception as e:
+        _refund_user_credits(current_user.id, search_cost, f"search_failed:{search_id}")
+        logger.error(f"❌ [{search_id}] 搜索异常: {e}")
+        raise HTTPException(status_code=500, detail=f"搜索服务不可用: {str(e)}")
+
+    heatmap_data = _classify_heatmap_levels(raw_data)
+    valid_prices = [c.price for c in heatmap_data if c.price is not None]
+    lowest_price = lowest_price_date = average_price = highest_price = None
+    best_flight = None
+    if valid_prices:
+        lowest_price = min(valid_prices)
+        highest_price = max(valid_prices)
+        average_price = round(sum(valid_prices) / len(valid_prices), 2)
+        for cell in heatmap_data:
+            if cell.price == lowest_price:
+                lowest_price_date = cell.date
+                break
+        for r in range_results:
+            if r["price"] == lowest_price and r.get("flight_data"):
+                fd = r["flight_data"]
+                if isinstance(fd, dict):
+                    best_flight = FlightDetail(**{k: fd.get(k) for k in FlightDetail.model_fields})
+                break
+
+    return_heatmap_data = []
+    return_lowest_price = return_lowest_price_date = None
+    if return_raw_data:
+        return_heatmap_data = _classify_heatmap_levels(return_raw_data)
+        return_valid = [c.price for c in return_heatmap_data if c.price is not None]
+        if return_valid:
+            return_lowest_price = min(return_valid)
+            for cell in return_heatmap_data:
+                if cell.price == return_lowest_price:
+                    return_lowest_price_date = cell.date
+                    break
+
+    return SearchResponse(
+        search_id=search_id, origin=origin, destination=destination,
+        start_date=request.start_date, days=request.days, cabin_class=request.cabin_class,
+        lowest_price=lowest_price, lowest_price_date=lowest_price_date,
+        average_price=average_price, highest_price=highest_price,
+        heatmap_data=heatmap_data, best_flight=best_flight,
+        data_source=data_source, searched_at=datetime.utcnow().isoformat(),
+        trip_type=request.trip_type, return_date=request.return_date,
+        return_lowest_price=return_lowest_price,
+        return_lowest_price_date=return_lowest_price_date,
+        return_heatmap_data=return_heatmap_data,
+    )
+
+
+# ============================================================================
+# API 端点：询价系统（Quote）
+# ============================================================================
+
+
+class QuoteSearchRequest(BaseModel):
+    """搜索询价请求"""
+    days: int = Field(default=30, ge=1, le=60, description="搜索天数")
+
+
+class QuoteSearchResponse(BaseModel):
+    """搜索询价响应"""
+    cost: int = Field(description="本次搜索消耗的积分数")
+    currency: str = Field(default="credits", description="积分单位")
+    user_credits: int = Field(description="用户当前积分余额")
+    sufficient: bool = Field(description="余额是否充足")
+
+
+@app.post("/api/v1/quote/search", response_model=QuoteSearchResponse, summary="搜索费用询价", tags=["quote"])
+async def quote_search(request: QuoteSearchRequest, current_user: User = Depends(get_current_user)):
+    """
+    查询一次搜索操作的积分费用（不实际扣费）。
+
+    分级定价逻辑：
+    - days == 1：单日搜索，cost = 1 积分
+    - days > 1 ：多日热力图（情报分析服务），cost = 5 积分
+
+    前端应在执行搜索前调用此接口，并在 UI 弹窗中展示真实费用让用户确认。
+    """
+    cost = 1 if request.days == 1 else 5  # 分级定价：单日 1 积分，多日情报分析 5 积分
+    with Session(engine) as session:
+        user = session.get(User, current_user.id)
+        user_credits = user.credits if user else 0
+    return QuoteSearchResponse(
+        cost=cost,
+        currency="credits",
+        user_credits=user_credits,
+        sufficient=user_credits >= cost,
+    )
+
+
+# ============================================================================
+# API 端点：监控任务 CRUD（数据隔离）
+# ============================================================================
+
+
+@app.post("/api/v1/monitors", response_model=MonitorResponse, status_code=201, summary="创建监控任务", tags=["monitors"])
+async def create_monitor(request: MonitorCreateRequest, current_user: User = Depends(get_current_user)):
+    """创建持久化监控任务，自动绑定当前用户。"""
+    origin = request.origin.upper()
+    destination = request.destination.upper()
+
+    if origin == destination:
+        raise HTTPException(status_code=400, detail="出发地和目的地不能相同")
+    try:
+        start_date_obj = date.fromisoformat(request.start_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"日期格式无效: '{request.start_date}'")
+    if start_date_obj < date.today():
+        raise HTTPException(status_code=400, detail="起始日期不能早于今天")
+
+    valid_trip_types = ["one_way", "round_trip"]
+    if request.trip_type not in valid_trip_types:
+        raise HTTPException(status_code=400, detail=f"无效行程类型: '{request.trip_type}'")
+
+    return_date_obj = None
+    if request.trip_type == "round_trip":
+        if not request.return_date:
+            raise HTTPException(status_code=400, detail="往返航班必须指定返程日期")
+        try:
+            return_date_obj = date.fromisoformat(request.return_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"返程日期格式无效")
+        if return_date_obj <= start_date_obj:
+            raise HTTPException(status_code=400, detail="返程日期必须晚于出发日期")
+
+    # Phase 2: 动态计费 — ceil((duration_days * 24 * 60 / interval_minutes) * 0.1)
+    total_minutes = request.duration_days * 24 * 60
+    estimated_cost = max(1, math.ceil((total_minutes / request.interval_minutes) * 0.1))
+
+    # 积分检查：余额不足时返回 402
+    with Session(engine) as session:
+        user = session.get(User, current_user.id)
+        if not user or user.credits < estimated_cost:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=f"Insufficient credits. Required: {estimated_cost}, Available: {user.credits if user else 0}. Please top up.",
+            )
+        # 扣除动态积分
+        credits_before = user.credits
+        user.credits -= estimated_cost
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        _record_transaction(
+            user_id=user.id,
+            transaction_type="consumption",
+            amount=-estimated_cost,
+            credits_before=credits_before,
+            credits_after=user.credits,
+            description=(
+                f"Monitor creation charge ({request.origin}->{request.destination}, "
+                f"interval={request.interval_minutes}m, duration={request.duration_days}d)"
+            ),
+            reference_type="monitor_create",
+            reference_id=f"{request.origin}-{request.destination}-{request.start_date}",
+        )
+        logger.info(f"💳 User #{current_user.id} 扣除 {estimated_cost} 积分（频率={request.interval_minutes}m, 时长={request.duration_days}d），剩余: {user.credits}")
+
+    # Phase 2: 计算 end_date 和 next_run_time
+    now_utc = datetime.utcnow()
+    end_date_dt = now_utc + timedelta(days=request.duration_days)
+    next_run_dt = now_utc + timedelta(minutes=request.interval_minutes)
+
+    # 创建任务（绑定 user_id）
+    task = MonitorTask(
+        user_id=current_user.id,
+        origin=origin, destination=destination,
+        start_date=request.start_date, days=request.days,
+        cabin_class=request.cabin_class, adults=request.adults, children=request.children,
+        target_price=request.target_price, notification_email=request.notification_email,
+        max_stops=request.max_stops, departure_time_min=request.departure_time_min,
+        departure_time_max=request.departure_time_max, sort_strategy=request.sort_strategy,
+        trip_type=request.trip_type, return_date=request.return_date,
+        arrival_time_min=request.arrival_time_min, arrival_time_max=request.arrival_time_max,
+        airline_include=request.airline_include, excluded_airlines=request.excluded_airlines,
+        status="active", created_at=now_utc.isoformat(),
+        # Phase 2 新字段
+        interval_minutes=request.interval_minutes,
+        end_date=end_date_dt.isoformat(),
+        next_run_time=next_run_dt.isoformat(),
+        total_credits_deducted=estimated_cost,
+    )
+
+    task_id = None
+    try:
+        with Session(engine) as session:
+            session.add(task)
+            session.commit()
+            session.refresh(task)
+            task_id = task.id
+            logger.info(f"✅ User #{current_user.id} 创建监控 #{task_id}: {origin}->{destination}")
+    except Exception as create_err:
+        _refund_user_credits(current_user.id, estimated_cost, "monitor_create_failed")
+        logger.error(f"❌ 创建监控失败，已退款: {create_err}")
+        raise HTTPException(status_code=500, detail="创建监控任务失败，已自动退款")
+
+    # 立即执行初始搜索
+    try:
+        check_date = start_date_obj
+        if USE_MOCK_DATA:
+            mock_data = _generate_mock_heatmap(origin, destination, check_date, 1, request.cabin_class)
+            if mock_data and mock_data[0]["price"] is not None:
+                initial_price = mock_data[0]["price"]
+                if return_date_obj:
+                    return_mock = _generate_mock_heatmap(destination, origin, return_date_obj, 1, request.cabin_class)
+                    if return_mock and return_mock[0]["price"] is not None:
+                        initial_price += return_mock[0]["price"]
+                mock_flight = _generate_mock_flight_detail(
+                    origin, destination, request.start_date, initial_price,
+                    max_stops=request.max_stops, departure_time_min=request.departure_time_min,
+                    departure_time_max=request.departure_time_max, arrival_time_min=request.arrival_time_min,
+                    arrival_time_max=request.arrival_time_max, airline_include=request.airline_include,
+                )
+                flight_info = mock_flight.model_dump()
+            else:
+                initial_price = None
+                flight_info = None
+        else:
+            result = _search_serpapi_single_day(
+                origin, destination, check_date, request.cabin_class,
+                request.adults, request.children, request.max_stops,
+                request.departure_time_min, request.departure_time_max,
+                request.sort_strategy, request.arrival_time_min,
+                request.arrival_time_max, request.airline_include, request.excluded_airlines,
+                return_date_obj,
+            )
+            if result:
+                initial_price = result["price"]
+                flight_info = result
+            else:
+                initial_price = None
+                flight_info = None
+
+        with Session(engine) as session:
+            db_task = session.get(MonitorTask, task_id)
+            if db_task and initial_price is not None:
+                db_task.current_price = initial_price
+                db_task.lowest_price = initial_price
+                db_task.lowest_price_date = check_date.isoformat()
+                db_task.last_checked_at = datetime.utcnow().isoformat()
+                if flight_info:
+                    db_task.booking_link = flight_info.get("booking_link")
+                    db_task.airline = flight_info.get("airline")
+                    db_task.flight_number = flight_info.get("flight_number")
+                    db_task.baggage_info = flight_info.get("baggage_info")
+                if request.target_price and initial_price <= request.target_price:
+                    db_task.status = "found"
+                    if request.notification_email:
+                        send_alert_email(
+                            to_email=request.notification_email, origin=origin, destination=destination,
+                            price=initial_price, target_price=request.target_price,
+                            departure_date=request.start_date,
+                            link=flight_info.get("booking_link", "#") if flight_info else "#",
+                            adults=request.adults, children=request.children,
+                            airline=flight_info.get("airline") if flight_info else None,
+                            flight_number=flight_info.get("flight_number") if flight_info else None,
+                            monitor_id=task_id,
+                        )
+                ph = PriceHistory(
+                    monitor_id=task_id, price=initial_price,
+                    booking_link=flight_info.get("booking_link") if flight_info else None,
+                )
+                session.add(ph)
+                session.add(db_task)
+                session.commit()
+                session.refresh(db_task)
+    except Exception as e:
+        logger.warning(f"  ⚠️ 初始搜索失败: {e}")
+
+    with Session(engine) as session:
+        final_task = session.get(MonitorTask, task_id)
+        return _monitor_response_from_task(final_task)
+
+
+@app.get("/api/v1/monitors", response_model=List[MonitorResponse], summary="获取当前用户的监控任务", tags=["monitors"])
+async def get_monitors(
+    include_archived: bool = False,
+    limit: int = 100,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+):
+    """获取当前用户的监控任务（数据隔离，排除已软删除的，支持分页）"""
+    safe_limit = max(1, min(limit, 200))
+    safe_offset = max(0, offset)
+    with Session(engine) as session:
+        statement = (
+            select(MonitorTask)
+            .where(MonitorTask.user_id == current_user.id)
+            .where(MonitorTask.is_deleted == False)
+        )
+        if not include_archived:
+            statement = statement.where(MonitorTask.status != "archived")
+        statement = statement.order_by(MonitorTask.id.desc()).offset(safe_offset).limit(safe_limit)
+        tasks = session.exec(statement).all()
+        return [_monitor_response_from_task(t) for t in tasks]
+
+
+@app.delete("/api/v1/monitors/{monitor_id}", status_code=204, summary="软删除监控任务", tags=["monitors"])
+async def delete_monitor(monitor_id: int, current_user: User = Depends(get_current_user)):
+    """
+    软删除指定的监控任务（只能删除自己的）。
+
+    不会物理删除数据，而是将 is_deleted 标记为 True。
+    可通过 POST /api/v1/monitors/{id}/restore 恢复。
+    """
+    with Session(engine) as session:
+        task = session.get(MonitorTask, monitor_id)
+        if not task:
+            raise HTTPException(status_code=404, detail=f"任务 #{monitor_id} 不存在")
+        # 数据隔离：确保只能删除自己的任务
+        if task.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="无权删除其他用户的任务")
+        if task.is_deleted:
+            raise HTTPException(status_code=400, detail=f"任务 #{monitor_id} 已在回收站中")
+        task.is_deleted = True
+        task.status = "paused"  # 软删除后暂停调度
+        session.add(task)
+        session.commit()
+        logger.info(f"🗑️ User #{current_user.id} 软删除任务 #{monitor_id}")
+    return None
+
+
+@app.get("/api/v1/monitors/trash", response_model=List[MonitorResponse], summary="获取回收站中的监控任务", tags=["monitors"])
+async def get_trash_monitors(current_user: User = Depends(get_current_user)):
+    """
+    获取当前用户已软删除的监控任务列表（回收站）。
+
+    仅返回 is_deleted == True 的任务，按 ID 倒序排列。
+    """
+    with Session(engine) as session:
+        statement = (
+            select(MonitorTask)
+            .where(MonitorTask.user_id == current_user.id)
+            .where(MonitorTask.is_deleted == True)
+            .order_by(MonitorTask.id.desc())
+        )
+        tasks = session.exec(statement).all()
+        return [_monitor_response_from_task(t) for t in tasks]
+
+
+@app.post("/api/v1/monitors/{monitor_id}/restore", response_model=MonitorResponse, summary="恢复已删除的监控任务", tags=["monitors"])
+async def restore_monitor(monitor_id: int, current_user: User = Depends(get_current_user)):
+    """
+    从回收站恢复指定的监控任务。
+
+    将 is_deleted 设为 False，状态恢复为 'active'。
+    只能恢复自己的任务。
+    """
+    with Session(engine) as session:
+        task = session.get(MonitorTask, monitor_id)
+        if not task:
+            raise HTTPException(status_code=404, detail=f"任务 #{monitor_id} 不存在")
+        if task.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="无权恢复其他用户的任务")
+        if not task.is_deleted:
+            raise HTTPException(status_code=400, detail=f"任务 #{monitor_id} 未被删除，无需恢复")
+        task.is_deleted = False
+        task.status = "active"
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+        logger.info(f"♻️ User #{current_user.id} 恢复任务 #{monitor_id}")
+        return _monitor_response_from_task(task)
+
+
+class MonitorUpdateRequest(BaseModel):
+    """编辑监控任务请求（Phase 2: 含频率修改）"""
+    target_price: Optional[float] = Field(default=None, gt=0, description="新目标价格 USD")
+    notification_email: Optional[str] = Field(default=None, description="新通知邮箱")
+    start_date: Optional[str] = Field(default=None, description="新出发日期 YYYY-MM-DD")
+    return_date: Optional[str] = Field(default=None, description="新返程日期 YYYY-MM-DD")
+    interval_minutes: Optional[int] = Field(default=None, ge=10, le=1440, description="新检查频率（分钟）")
+    excluded_airlines: Optional[str] = Field(default=None, description="排除航司代码，逗号分隔")
+
+
+@app.put("/api/v1/monitors/{monitor_id}", response_model=MonitorResponse, summary="编辑监控任务", tags=["monitors"])
+async def update_monitor(monitor_id: int, request: MonitorUpdateRequest, current_user: User = Depends(get_current_user)):
+    """
+    编辑指定的监控任务（只能编辑自己的、未删除的任务）。
+
+    可更新字段：target_price, notification_email, start_date, return_date。
+    如果 start_date 或 return_date 发生变化，将自动重置：
+    - status → 'active'
+    - current_price → None
+    - lowest_price → None
+    - lowest_price_date → None
+    """
+    with Session(engine) as session:
+        task = session.get(MonitorTask, monitor_id)
+        if not task:
+            raise HTTPException(status_code=404, detail=f"任务 #{monitor_id} 不存在")
+        if task.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="无权编辑其他用户的任务")
+        if task.is_deleted:
+            raise HTTPException(status_code=400, detail=f"任务 #{monitor_id} 已被删除，请先恢复")
+
+        dates_changed = False
+
+        # 更新 target_price（传入即更新）
+        if request.target_price is not None:
+            task.target_price = request.target_price
+
+        # 更新 notification_email（传入即更新，允许空字符串清除）
+        if request.notification_email is not None:
+            task.notification_email = request.notification_email if request.notification_email.strip() else None
+
+        # 更新 start_date
+        if request.start_date is not None:
+            try:
+                new_start = date.fromisoformat(request.start_date)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"出发日期格式无效: '{request.start_date}'")
+            if new_start < date.today():
+                raise HTTPException(status_code=400, detail="出发日期不能早于今天")
+            if task.start_date != request.start_date:
+                task.start_date = request.start_date
+                dates_changed = True
+
+        # 更新 return_date
+        if request.return_date is not None:
+            if task.trip_type != "round_trip":
+                raise HTTPException(status_code=400, detail="单程航班无法设置返程日期")
+            try:
+                new_return = date.fromisoformat(request.return_date)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"返程日期格式无效: '{request.return_date}'")
+            # 校验返程日期晚于出发日期
+            effective_start = request.start_date if request.start_date else task.start_date
+            if new_return <= date.fromisoformat(effective_start):
+                raise HTTPException(status_code=400, detail="返程日期必须晚于出发日期")
+            if task.return_date != request.return_date:
+                task.return_date = request.return_date
+                dates_changed = True
+
+        # 更新排除航司
+        if request.excluded_airlines is not None:
+            task.excluded_airlines = request.excluded_airlines.strip() or None
+
+        # Phase 2: 更新 interval_minutes（频率修改）
+        if request.interval_minutes is not None:
+            valid_intervals = {10, 30, 60, 240, 720, 1440}
+            if request.interval_minutes not in valid_intervals:
+                raise HTTPException(status_code=400, detail=f"无效频率: {request.interval_minutes}，允许值: {sorted(valid_intervals)}")
+            if task.interval_minutes != request.interval_minutes:
+                task.interval_minutes = request.interval_minutes
+                # 重新计算 next_run_time
+                task.next_run_time = (datetime.utcnow() + timedelta(minutes=request.interval_minutes)).isoformat()
+                logger.info(f"⏱️ 任务 #{monitor_id} 频率变更为 {request.interval_minutes}m")
+
+        # 日期变更时重置价格状态
+        if dates_changed:
+            task.status = "active"
+            task.current_price = None
+            task.lowest_price = None
+            task.lowest_price_date = None
+            task.last_checked_at = None
+            logger.info(f"📅 任务 #{monitor_id} 日期变更，价格状态已重置")
+
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+        logger.info(f"✏️ User #{current_user.id} 编辑任务 #{monitor_id}")
+        return _monitor_response_from_task(task)
+
+
+class MonitorStatusUpdate(BaseModel):
+    """暂停/恢复/存档监控任务请求"""
+    status: str = Field(..., description="目标状态: 'paused' / 'active' / 'archived'")
+
+
+@app.patch("/api/v1/monitors/{monitor_id}/status", response_model=MonitorResponse, summary="暂停/恢复/存档监控任务", tags=["monitors"])
+async def update_monitor_status(monitor_id: int, request: MonitorStatusUpdate, current_user: User = Depends(get_current_user)):
+    """
+    暂停、恢复或存档指定的监控任务。
+
+    状态转换规则：
+    - active ↔ paused: 自由切换
+    - expired/found → archived: 允许存档
+    - archived 状态不可再切换回 active/paused
+    """
+    allowed_statuses = {"paused", "active", "archived"}
+    if request.status not in allowed_statuses:
+        raise HTTPException(status_code=400, detail=f"无效状态: '{request.status}'，允许: {sorted(allowed_statuses)}")
+
+    with Session(engine) as session:
+        task = session.get(MonitorTask, monitor_id)
+        if not task:
+            raise HTTPException(status_code=404, detail=f"任务 #{monitor_id} 不存在")
+        if task.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="无权操作其他用户的任务")
+
+        # Phase 2: 存档逻辑 — 仅允许从 expired/found 转入 archived
+        if request.status == "archived":
+            if task.status not in ("expired", "found"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"只有 'expired' 或 'found' 状态的任务可以存档，当前状态: '{task.status}'"
+                )
+        elif request.status in ("active", "paused"):
+            # active/paused 切换：只能从 active/paused 状态操作
+            if task.status not in ("active", "paused"):
+                raise HTTPException(status_code=400, detail=f"任务当前状态为 '{task.status}'，无法切换为 '{request.status}'")
+
+        task.status = request.status
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+
+        status_icons = {"paused": "⏸️", "active": "▶️", "archived": "📦"}
+        status_labels = {"paused": "暂停", "active": "恢复", "archived": "存档"}
+        logger.info(f"{status_icons.get(request.status, '❓')} User #{current_user.id} {status_labels.get(request.status, '操作')}任务 #{monitor_id}")
+        return _monitor_response_from_task(task)
+
+
+@app.get("/api/v1/monitors/{monitor_id}/history", summary="获取价格历史", tags=["monitors"])
+async def get_price_history(monitor_id: int, limit: int = 50, current_user: User = Depends(get_current_user)):
+    """获取指定任务的价格历史记录（只能查看自己的）"""
+    with Session(engine) as session:
+        task = session.get(MonitorTask, monitor_id)
+        if not task:
+            raise HTTPException(status_code=404, detail=f"任务 #{monitor_id} 不存在")
+        if task.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="无权查看其他用户的数据")
+        statement = (
+            select(PriceHistory)
+            .where(PriceHistory.monitor_id == monitor_id)
+            .order_by(PriceHistory.id.desc())
+            .limit(limit)
+        )
+        histories = session.exec(statement).all()
+        return [{"id": h.id, "price": h.price, "checked_at": h.checked_at, "booking_link": h.booking_link} for h in histories]
+
+
+# ============================================================================
+# API 端点：Admin 管理面板（RBAC: admin only）
+# ============================================================================
+
+
+@app.get("/api/v1/admin/stats", response_model=AdminStatsResponse, summary="管理员仪表盘统计", tags=["admin"])
+async def admin_get_stats(admin_user: User = Depends(get_current_admin)):
+    """
+    获取系统统计数据（仅 admin 可访问）。
+
+    返回用户总数、活跃监控数、总搜索次数、调度器状态、最后运行时间。
+    """
+    with Session(engine) as session:
+        total_users = len(session.exec(select(User)).all())
+        active_monitors = len(
+            session.exec(
+                select(MonitorTask).where(
+                    MonitorTask.status == "active",
+                    MonitorTask.is_deleted == False,
+                )
+            ).all()
+        )
+        # 真实搜索计数：统计 PriceHistory 总记录数（每次搜索/调度器检查都会写入）
+        total_searches = len(session.exec(select(PriceHistory)).all())
+
+    # 调度器状态
+    scheduler_running = _scheduler is not None and _scheduler.running if _scheduler else False
+    scheduler_status = "Running" if scheduler_running else "Stopped"
+    last_run_time = datetime.utcnow().isoformat()  # Mock liveness timestamp
+
+    return AdminStatsResponse(
+        total_users=total_users,
+        active_monitors=active_monitors,
+        total_searches=total_searches,  # 真实数据：从 PriceHistory 表统计
+        scheduler_status=scheduler_status,
+        last_run_time=last_run_time,
+    )
+
+
+@app.get("/api/v1/admin/users", response_model=List[AdminUserResponse], summary="获取所有用户列表", tags=["admin"])
+async def admin_get_users(admin_user: User = Depends(get_current_admin)):
+    """
+    获取系统所有用户列表（仅 admin 可访问）。
+
+    按 ID 倒序排列，返回 id, email, role, credits, created_at。
+    """
+    with Session(engine) as session:
+        users = session.exec(select(User).order_by(User.id.desc())).all()
+        return [
+            AdminUserResponse(
+                id=u.id,
+                email=u.email,
+                role=u.role,
+                credits=u.credits,
+                created_at=u.created_at,
+            )
+            for u in users
+        ]
+
+
+@app.get(
+    "/api/v1/admin/users/{user_id}/transactions",
+    response_model=List[TransactionHistoryResponse],
+    summary="管理员查看指定用户积分流水",
+    tags=["admin"],
+)
+async def admin_get_user_transactions(
+    user_id: int,
+    limit: int = 100,
+    offset: int = 0,
+    admin_user: User = Depends(get_current_admin),
+):
+    """管理员按时间倒序查看指定用户的积分流水。"""
+    safe_limit = max(1, min(limit, 500))
+    safe_offset = max(0, offset)
+
+    with Session(engine) as session:
+        user = session.get(User, user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail=f"User #{user_id} not found")
+
+        records = session.exec(
+            select(TransactionHistory)
+            .where(TransactionHistory.user_id == user_id)
+            .order_by(TransactionHistory.id.desc())
+            .offset(safe_offset)
+            .limit(safe_limit)
+        ).all()
+        return [TransactionHistoryResponse(**record.model_dump()) for record in records]
+
+
+@app.get("/api/v1/admin/monitors", response_model=List[AdminMonitorResponse], summary="获取所有用户的监控任务", tags=["admin"])
+async def admin_get_all_monitors(admin_user: User = Depends(get_current_admin)):
+    """
+    获取系统中所有用户的监控任务列表（仅 admin 可访问）。
+
+    通过 JOIN User 表获取 user_email，按 ID 倒序排列。
+    """
+    with Session(engine) as session:
+        tasks = session.exec(select(MonitorTask).order_by(MonitorTask.id.desc())).all()
+        # 批量获取关联用户邮箱
+        user_ids = list({t.user_id for t in tasks if t.user_id is not None})
+        users_map: dict[int, str] = {}
+        if user_ids:
+            users = session.exec(select(User).where(User.id.in_(user_ids))).all()
+            users_map = {u.id: u.email for u in users}
+
+        return [
+            AdminMonitorResponse(
+                id=t.id,
+                user_id=t.user_id,
+                user_email=users_map.get(t.user_id, "unknown") if t.user_id else "N/A",
+                origin=t.origin,
+                destination=t.destination,
+                start_date=t.start_date,
+                days=t.days,
+                cabin_class=t.cabin_class,
+                status=t.status,
+                current_price=t.current_price,
+                lowest_price=t.lowest_price,
+                target_price=t.target_price,
+                trip_type=t.trip_type,
+                created_at=t.created_at,
+                last_checked_at=t.last_checked_at,
+            )
+            for t in tasks
+        ]
+
+
+@app.delete("/api/v1/admin/users/{user_id}", status_code=204, summary="删除用户及其所有数据", tags=["admin"])
+async def admin_delete_user(user_id: int, admin_user: User = Depends(get_current_admin)):
+    """
+    管理员删除指定用户及其所有关联数据（仅 admin 可访问）。
+
+    级联删除顺序：
+    1. 该用户所有监控任务的价格历史 (PriceHistory)
+    2. 该用户所有监控任务 (MonitorTask)
+    3. 该用户的密码重置记录 (PasswordReset)
+    4. 用户本身 (User)
+
+    不允许删除自己（防止 admin 误删自己）。
+    """
+    if user_id == admin_user.id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own admin account")
+
+    with Session(engine) as session:
+        user = session.get(User, user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail=f"User #{user_id} not found")
+
+        # 1. 删除该用户所有监控任务的价格历史
+        user_tasks = session.exec(
+            select(MonitorTask).where(MonitorTask.user_id == user_id)
+        ).all()
+        for task in user_tasks:
+            histories = session.exec(
+                select(PriceHistory).where(PriceHistory.monitor_id == task.id)
+            ).all()
+            for h in histories:
+                session.delete(h)
+
+        # 2. 删除该用户所有监控任务
+        for task in user_tasks:
+            session.delete(task)
+
+        # 3. 删除该用户的密码重置记录
+        reset_records = session.exec(
+            select(PasswordReset).where(PasswordReset.email == user.email)
+        ).all()
+        for r in reset_records:
+            session.delete(r)
+
+        # 4. 删除该用户的交易流水
+        transaction_records = session.exec(
+            select(TransactionHistory).where(TransactionHistory.user_id == user_id)
+        ).all()
+        for record in transaction_records:
+            session.delete(record)
+
+        # 5. 删除用户
+        session.delete(user)
+        session.commit()
+
+        logger.info(
+            f"🗑️ Admin #{admin_user.id} deleted User #{user_id} ({user.email}) "
+            f"and {len(user_tasks)} monitor(s)"
+        )
+
+    return None
+
+
+@app.post(
+    "/api/v1/admin/users/{user_id}/credits",
+    response_model=AdminCreditAdjustResponse,
+    summary="管理员调整用户积分",
+    tags=["admin"],
+)
+async def admin_adjust_user_credits(
+    user_id: int,
+    request: AdminCreditAdjustRequest,
+    admin_user: User = Depends(get_current_admin),
+):
+    """
+    管理员直接调整指定用户的积分余额（仅 admin 可访问）。
+
+    amount 为正数时增加积分，为负数时扣除积分（不会低于 0）。
+    """
+    with Session(engine) as session:
+        user = session.get(User, user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail=f"User #{user_id} not found")
+        credits_before = user.credits
+        user.credits = max(0, user.credits + request.amount)
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        actual_delta = user.credits - credits_before
+        _record_transaction(
+            user_id=user.id,
+            transaction_type="system_adjustment",
+            amount=actual_delta,
+            credits_before=credits_before,
+            credits_after=user.credits,
+            description="Admin credit adjustment",
+            reference_type="admin_adjustment",
+            reference_id=str(admin_user.id),
+            operator_user_id=admin_user.id,
+        )
+        logger.info(
+            f"🔧 Admin #{admin_user.id} adjusted User #{user_id} credits: "
+            f"{credits_before} → {user.credits} (delta: {request.amount})"
+        )
+        return AdminCreditAdjustResponse(
+            user_id=user.id,
+            email=user.email,
+            credits_before=credits_before,
+            credits_after=user.credits,
+            amount_adjusted=request.amount,
+        )
+
+
+# ============================================================================
+# 入口点
+# ============================================================================
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")

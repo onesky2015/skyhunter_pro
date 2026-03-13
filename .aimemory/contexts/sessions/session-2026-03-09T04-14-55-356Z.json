@@ -1,0 +1,12 @@
+{
+  "startedAt": "2026-03-09T04:14:55.356Z",
+  "pluginVersion": "1.1.0",
+  "workspaceRoot": "d:\\SkyHunter\\SkyHunter_Pro",
+  "operations": [
+    {
+      "ts": "2026-03-09T04:21:07.852Z",
+      "type": "scan",
+      "detail": "205 entities extracted"
+    }
+  ]
+}

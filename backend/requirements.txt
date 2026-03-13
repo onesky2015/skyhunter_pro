@@ -1,0 +1,39 @@
+# filename: backend/requirements.txt
+# SkyHunter Pro Backend v3.2.0 Dependencies
+# 安装命令: pip install -r requirements.txt
+
+# ============ 核心框架 ============
+fastapi==0.109.0          # Web 框架
+uvicorn==0.27.0           # ASGI 服务器
+pydantic>=2.0.0           # 数据验证
+
+# ============ 数据库 ============
+sqlmodel>=0.0.14          # SQLModel ORM (SQLite / PostgreSQL)
+psycopg2-binary>=2.9.0    # PostgreSQL 驱动（远程模式需要）
+
+# ============ 认证 & 安全 ============
+passlib[bcrypt]>=1.7.4    # 密码哈希 (bcrypt)
+bcrypt>=4.0.0,<5.0.0     # bcrypt 4.x (passlib 兼容)
+python-jose[cryptography]>=3.3.0  # JWT Token
+python-multipart>=0.0.6   # OAuth2 表单解析
+
+# ============ 后台调度器 ============
+apscheduler>=3.10.0       # APScheduler 定时任务
+
+# ============ HTTP 客户端 ============
+requests>=2.31.0          # HTTP 请求库（Brevo 邮件 API）
+
+# ============ 航班搜索引擎 ============
+# 仅在 USE_MOCK_DATA=False 时需要
+google-search-results>=2.4.2  # SerpApi Python SDK
+
+# ============ TOTP 双因素认证 ============
+pyotp>=2.9.0              # TOTP 生成与验证
+qrcode[pil]>=7.4.0        # QR 码生成（base64 输出）
+
+# ============ 工具库 ============
+python-dotenv>=1.0.0      # .env 环境变量加载
+
+# ============ 监控（可选） ============
+# 生产环境异常追踪，需配置 SENTRY_DSN
+sentry-sdk[fastapi]>=1.39.0

@@ -1,0 +1,60 @@
+SkyHunter Pro - Cursor Master Rules (v4.2 - Manifest Authority)
+👑 交互契约 (The Boss Protocol)
+身份确认: 必须以 "Boss," 开头回复。
+
+单一事实来源 (SSOT): system_manifest.json 是本项目的最高宪法。 严禁在代码中私自添加、修改或删除任何数据库字段、API 端点或业务常量。
+
+初始化校验 (Initial Manifest Generation): 在开启任何新功能开发或大规模审计前，你的第一步必须是：读取并输出当前 system_manifest.json 的核心结构摘要，以证明你已完全同步最新的系统定义。
+
+修改审批流:
+
+如果发现代码需求超出当前 Manifest 定义，必须先向 Boss 申请修改 Manifest。
+
+只有在 Boss 批准 Manifest 变更后，方可修改 .py 或 .tsx 文件。
+
+🧠 自分形与审计规范
+
+自分形注释: 每个拆分出的组件必须包含 INPUT/OUTPUT/POS，且其数据结构必须与 Manifest 中的 database_schema 或 pydantic_models 100% 对应 。
+
+审计对齐: 检查拆分后的组件时，如果 Props 命名与 Manifest 定义不符，必须作为 Bug 立即报告。
+
+🎯 核心原则 (Core Principles)
+
+非破坏性修复: 严格保留现有逻辑，尤其是 FlightCache 和鉴权流程 。
+
+
+后端驱动: 优先确保 main.py 符合 Manifest 中的 api_registry 。
+
+
+禁止全量输出: 仅输出修改的代码块以节省 Token 。
+
+✅ 强制执行规范 (MANDATORY)
+
+数据库一致性: 所有的 SQL 查询必须基于 Manifest 定义的表名和字段（如 transaction_history 的变动金额字段 amount） 。
+
+
+业务常量对齐: 必须使用 Manifest 中 business_constants 定义的 cabin_map 或 strategy_map，严禁在代码中硬编码字符串 。
+
+
+询价闭环: 前端必须在搜索前调用 /api/v1/quote/search（详见 API Registry） 。
+
+📋 任务核对清单 (Checklist - v4.2)
+每次回复结尾必须更新，确保每一行代码都受控于 Manifest：
+
+⚖️ Manifest 一致性审计
+[ ] 1. 字段对齐: 验证拆分组件的 Props 是否完全符合 system_manifest.json 。
+
+[ ] 2. 常量同步: 验证 UI 显示是否使用了 cabin_display 和 tier_display 。
+
+[ ] 3. API 契约: 验证后端 Service 函数是否与 api_registry 定义匹配 。
+
+🚀 Phase 1 剩余关键任务
+[ ] 10. 生产环境安全: CORS 强制验证配置。
+
+[ ] 11. 组件头补完: 为所有文件添加符合 Manifest 规范的自分形注释。
+
+[ ] 12. 导航集成: expo-router 底部 Tab 替换旧 Modal。
+
+[ ] 13. 数据迁移: SQLite 迁移至 Supabase PostgreSQL。
+
+[ ] 14. 真实数据闭环: 关闭 Mock，验证 SerpApi 逻辑。
