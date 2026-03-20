@@ -9,14 +9,21 @@ class SignupRequest(BaseModel):
     phone: Optional[str] = Field(default=None, description="手机号（可选）")
 
 class TokenResponse(BaseModel):
-    """登录成功返回的 Token"""
+    """登录成功返回的 Token（含 Refresh Token）"""
     access_token: str
+    refresh_token: Optional[str] = None
     token_type: str = "bearer"
+    expires_in: int = 3600
     user_id: int
     email: str
     full_name: Optional[str] = None
     role: str = "user"
     credits: int = 0
+
+
+class RefreshTokenRequest(BaseModel):
+    """刷新 token 请求"""
+    refresh_token: str = Field(..., description="Refresh token")
 
 class UserResponse(BaseModel):
     """用户信息响应"""
@@ -454,3 +461,14 @@ class TotpSetupResponse(BaseModel):
 class TotpVerifyRequest(BaseModel):
     """TOTP 验证请求"""
     code: str = Field(..., min_length=6, max_length=6)
+
+
+class OAuthAppleRequest(BaseModel):
+    """Apple Sign-In 请求"""
+    id_token: str = Field(..., description="Apple 返回的 identity token (JWT)")
+    full_name: Optional[str] = Field(default=None, description="用户全名（仅首次授权时可获取）")
+
+
+class OAuthGoogleRequest(BaseModel):
+    """Google Sign-In 请求"""
+    id_token: str = Field(..., description="Google 返回的 ID token (JWT)")

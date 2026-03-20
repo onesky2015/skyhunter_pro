@@ -1,0 +1,41 @@
+import React from 'react';
+import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
+
+const RANGES = [
+  { key: 'day', label: 'Daily' },
+  { key: 'week', label: 'Weekly' },
+  { key: 'month', label: 'Monthly' },
+  { key: 'quarter', label: 'Quarterly' },
+];
+
+interface Props {
+  value: string;
+  onChange: (range: string) => void;
+}
+
+export const TimeRangePicker: React.FC<Props> = ({ value, onChange }) => (
+  <View style={s.row}>
+    {RANGES.map((r) => (
+      <TouchableOpacity
+        key={r.key}
+        style={[s.chip, value === r.key && s.chipActive]}
+        onPress={() => onChange(r.key)}
+      >
+        <Text style={[s.chipText, value === r.key && s.chipTextActive]}>
+          {r.label}
+        </Text>
+      </TouchableOpacity>
+    ))}
+  </View>
+);
+
+const s = StyleSheet.create({
+  row: { flexDirection: 'row', gap: 6, marginBottom: 12, flexWrap: 'wrap' },
+  chip: {
+    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 16,
+    backgroundColor: '#222', borderWidth: 1, borderColor: '#444',
+  },
+  chipActive: { backgroundColor: '#00FF00', borderColor: '#00FF00' },
+  chipText: { color: '#AAA', fontSize: 11, fontWeight: '600' },
+  chipTextActive: { color: '#000' },
+});

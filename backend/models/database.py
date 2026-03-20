@@ -37,6 +37,9 @@ class User(SQLModel, table=True):
     last_login_ip: Optional[str] = SQLField(default=None, description="最后登录 IP")
     totp_secret: Optional[str] = SQLField(default=None, description="TOTP 密钥（加密存储）")
     totp_enabled: bool = SQLField(default=False, description="是否启用 TOTP 双因素认证")
+    auth_provider: str = SQLField(default="email", description="认证方式: email/apple/google")
+    apple_sub: Optional[str] = SQLField(default=None, index=True, description="Apple 用户唯一标识符")
+    google_sub: Optional[str] = SQLField(default=None, index=True, description="Google 用户唯一标识符")
 
 
 class MonitorTask(SQLModel, table=True):
@@ -237,6 +240,34 @@ class AdminBudget(SQLModel, table=True):
     provider: str = SQLField(default="serpapi", description="供应商：serpapi / other")
     description: Optional[str] = SQLField(default=None, description="备注说明")
     created_at: str = SQLField(default_factory=utc_iso_now, index=True, description="充值时间 ISO")
+
+
+class PushToken(SQLModel, table=True):
+    """用户推送通知 token 表"""
+    __tablename__ = "push_tokens"
+    __table_args__ = {"extend_existing": True}
+
+    id: Optional[int] = SQLField(default=None, primary_key=True)
+    user_id: int = SQLField(index=True, description="关联用户 ID")
+    token: str = SQLField(index=True, description="Expo push token 或 FCM token")
+    platform: str = SQLField(default="unknown", description="ios/android/web")
+    created_at: str = SQLField(default_factory=utc_iso_now, description="注册时间 ISO")
+    updated_at: str = SQLField(default_factory=utc_iso_now, description="更新时间 ISO")
+
+
+class RefreshToken(SQLModel, table=True):
+    """Refresh Token 表，用于 JWT 双 token 刷新机制"""
+    __tablename__ = "refresh_tokens"
+    __table_args__ = {"extend_existing": True}
+
+    id: Optional[int] = SQLField(default=None, primary_key=True)
+    user_id: int = SQLField(index=True, description="关联用户 ID")
+    token: str = SQLField(index=True, description="Refresh token 值（UUID）")
+    expires_at: str = SQLField(description="过期时间 ISO")
+    revoked: bool = SQLField(default=False, description="是否已撤销")
+    created_at: str = SQLField(default_factory=utc_iso_now, description="创建时间 ISO")
+    user_agent: Optional[str] = SQLField(default=None, description="客户端 User-Agent")
+    ip_address: Optional[str] = SQLField(default=None, description="创建时 IP")
 
 
 class AdminAuditLog(SQLModel, table=True):

@@ -111,6 +111,43 @@ def _process_active_monitors():
 
             for task in tasks:
                 try:
+                    # ── Step 0a: 余额不足自动暂停 ──
+                    if task.user_id:
+                        owner = session.get(User, task.user_id)
+                        if owner and owner.credits <= 0:
+                            prev_status = task.status
+                            task.status = "paused"
+                            session.add(MonitorActivityLog(
+                                monitor_id=task.id, event_type="paused",
+                                event_at=now_iso, previous_status=prev_status, new_status="paused",
+                            ))
+                            session.add(task)
+                            session.commit()
+                            logger.info(f"  ⏸️ 任务 #{task.id} 因余额不足自动暂停 (user #{task.user_id} credits={owner.credits})")
+                            continue
+
+                    # ── Step 0b: 连续无变化熔断（连续 10 次价格相同则暂停） ──
+                    MAX_UNCHANGED_CHECKS = 10
+                    recent_prices = session.exec(
+                        select(PriceHistory.price)
+                        .where(PriceHistory.monitor_id == task.id)
+                        .order_by(PriceHistory.id.desc())
+                        .limit(MAX_UNCHANGED_CHECKS)
+                    ).all()
+                    if len(recent_prices) >= MAX_UNCHANGED_CHECKS:
+                        unique_prices = set(recent_prices)
+                        if len(unique_prices) == 1:
+                            prev_status = task.status
+                            task.status = "paused"
+                            session.add(MonitorActivityLog(
+                                monitor_id=task.id, event_type="paused",
+                                event_at=now_iso, previous_status=prev_status, new_status="paused",
+                            ))
+                            session.add(task)
+                            session.commit()
+                            logger.info(f"  ⏸️ 任务 #{task.id} 连续 {MAX_UNCHANGED_CHECKS} 次无价格变化，触发熔断暂停")
+                            continue
+
                     # ── Step 1: 检查 end_date 过期 ──
                     if task.end_date:
                         end_dt = _parse_iso_datetime(task.end_date)

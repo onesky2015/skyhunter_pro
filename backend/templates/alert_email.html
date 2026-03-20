@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SkyHunter 价格提醒</title>
+</head>
+<body style="margin:0;padding:0;background-color:#000000;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background-color:#000000;padding:20px 0;">
+<tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="background-color:#111111;border-radius:12px;border:1px solid #00FF00;overflow:hidden;">
+  <!-- Header -->
+  <tr>
+    <td style="background-color:#111111;padding:24px 32px;text-align:center;border-bottom:1px solid #222222;">
+      <h1 style="margin:0;color:#00FF00;font-size:24px;font-weight:700;">SkyHunter</h1>
+      <p style="margin:4px 0 0;color:#666666;font-size:13px;">航班价格提醒 / Price Alert</p>
+    </td>
+  </tr>
+  <!-- Alert Banner -->
+  <tr>
+    <td style="padding:24px 32px;text-align:center;background-color:#002200;">
+      <p style="margin:0;color:#00FF00;font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:1px;">价格达标 Target Price Reached</p>
+      <h2 style="margin:12px 0 0;color:#FFFFFF;font-size:36px;font-weight:700;">${{current_price}}</h2>
+      <p style="margin:8px 0 0;color:#999999;font-size:14px;">目标价格 / Target: ${{target_price}}</p>
+    </td>
+  </tr>
+  <!-- Route Info -->
+  <tr>
+    <td style="padding:24px 32px;">
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td style="text-align:center;width:40%;">
+            <p style="margin:0;color:#00FF00;font-size:28px;font-weight:700;">{{origin}}</p>
+            <p style="margin:4px 0 0;color:#999999;font-size:12px;">出发地</p>
+          </td>
+          <td style="text-align:center;width:20%;">
+            <p style="margin:0;color:#333333;font-size:24px;">✈️</p>
+          </td>
+          <td style="text-align:center;width:40%;">
+            <p style="margin:0;color:#00FF00;font-size:28px;font-weight:700;">{{destination}}</p>
+            <p style="margin:4px 0 0;color:#999999;font-size:12px;">目的地</p>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+  <!-- Flight Details -->
+  <tr>
+    <td style="padding:0 32px 24px;">
+      <table width="100%" cellpadding="8" cellspacing="0" style="background-color:#1a1a1a;border-radius:8px;">
+        <tr>
+          <td style="color:#999999;font-size:12px;border-bottom:1px solid #222;">航司 / Airline</td>
+          <td style="color:#FFFFFF;font-size:14px;text-align:right;border-bottom:1px solid #222;">{{airline}}</td>
+        </tr>
+        <tr>
+          <td style="color:#999999;font-size:12px;border-bottom:1px solid #222;">日期 / Date</td>
+          <td style="color:#FFFFFF;font-size:14px;text-align:right;border-bottom:1px solid #222;">{{date}}</td>
+        </tr>
+        <tr>
+          <td style="color:#999999;font-size:12px;border-bottom:1px solid #222;">历史最低 / Lowest</td>
+          <td style="color:#00FF00;font-size:14px;text-align:right;border-bottom:1px solid #222;">${{lowest_price}}</td>
+        </tr>
+        <tr>
+          <td style="color:#999999;font-size:12px;">乘客 / Passengers</td>
+          <td style="color:#FFFFFF;font-size:14px;text-align:right;">{{passengers}}</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+  <!-- CTA -->
+  <tr>
+    <td style="padding:0 32px 32px;text-align:center;">
+      <a href="{{booking_link}}" style="display:inline-block;background-color:#00FF00;color:#000000;padding:14px 32px;border-radius:8px;font-weight:700;font-size:16px;text-decoration:none;">
+        查看详情 / View Deal →
+      </a>
+    </td>
+  </tr>
+  <!-- Footer -->
+  <tr>
+    <td style="padding:20px 32px;border-top:1px solid #222222;text-align:center;">
+      <p style="margin:0;color:#666666;font-size:11px;">此邮件由 SkyHunter 自动发送，请勿直接回复。</p>
+      <p style="margin:4px 0 0;color:#666666;font-size:11px;">This email was sent automatically by SkyHunter.</p>
+    </td>
+  </tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>

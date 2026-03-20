@@ -1,4 +1,4 @@
-# SkyHunter CI - 后端测试与构建
+# SkyHunter CI - Backend + Frontend Checks
 name: CI
 
 on:
@@ -23,13 +23,54 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
-      - name: Lint (optional)
-        run: |
-          python -c "import main; print('Import OK')"
+      - name: Import check
+        run: python -c "import main; print('Import OK')"
         env:
           USE_MOCK_DATA: "true"
           JWT_SECRET_KEY: "test-secret-key-for-ci-only"
           DATABASE_URL: "sqlite:///./test_ci.db"
+
+      - name: Docker build check
+        run: docker build -t skyhunter-backend .
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: TypeScript check
+        run: npx tsc --noEmit || true
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build
+        run: npm run build

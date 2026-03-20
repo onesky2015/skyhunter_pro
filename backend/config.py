@@ -31,16 +31,41 @@ JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "")
 if not JWT_SECRET_KEY:
     raise RuntimeError("JWT_SECRET_KEY 环境变量未配置。")
 JWT_ALGORITHM: str = "HS256"
-JWT_EXPIRE_HOURS: int = int(os.getenv("JWT_EXPIRE_HOURS", "72"))
+JWT_EXPIRE_HOURS: int = int(os.getenv("JWT_EXPIRE_HOURS", "1"))
+JWT_REFRESH_EXPIRE_DAYS: int = int(os.getenv("JWT_REFRESH_EXPIRE_DAYS", "30"))
 
 CORS_ALLOWED_ORIGINS_ENV: str = os.getenv("CORS_ALLOWED_ORIGINS", "")
+
+SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("SkyHunter")
+
+try:
+    from loguru import logger as _loguru_logger
+    import sys
+
+    _loguru_logger.remove()
+    _loguru_logger.add(
+        sys.stderr,
+        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <7}</level> | <cyan>{name}</cyan> | <level>{message}</level>",
+        level="INFO",
+        colorize=True,
+    )
+    _loguru_logger.add(
+        "logs/skyhunter_{time:YYYY-MM-DD}.log",
+        rotation="00:00",
+        retention="30 days",
+        compression="gz",
+        level="DEBUG",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <7} | {name} | {message}",
+    )
+    logger = _loguru_logger
+except ImportError:
+    logger = logging.getLogger("SkyHunter")
 
 FORGOT_PASSWORD_WINDOW_SECONDS: int = 15 * 60
 FORGOT_PASSWORD_MAX_REQUESTS: int = 100

@@ -5,10 +5,10 @@ from sqlmodel import Session, select
 from datetime import datetime, timedelta
 from typing import Optional
 from db import engine
-from models.database import User, PasswordReset, EmailVerification, TransactionHistory, MonitorTask, utc_iso_now
+from models.database import User, PasswordReset, EmailVerification, TransactionHistory, MonitorTask, RefreshToken, PushToken, utc_iso_now
 from schemas.api_models import *
 from api.deps import get_current_user
-from core.security import verify_password, hash_password, create_access_token, generate_reset_token
+from core.security import verify_password, hash_password, create_access_token, generate_reset_token, issue_token_pair
 from services.email import send_reset_code_email, send_verification_code_email
 from services.billing import _record_transaction, _refund_user_credits
 from core.rate_limit import (
@@ -184,10 +184,15 @@ async def verify_email(request: VerifyEmailRequest, http_request: StarletteReque
         _clear_rate_limit_attempts(_email_verify_attempts, rate_limit_key)
         logger.info(f"✅ 邮箱验证成功: {email} (ID: {user.id})")
 
-        access_token = create_access_token(data={"sub": user.email, "user_id": user.id, "role": user.role})
+        from core.middleware import _get_client_ip
+        client_ip = _get_client_ip(http_request)
+        ua = http_request.headers.get("user-agent", "")
+        tokens = issue_token_pair(user, ip_address=client_ip, user_agent=ua)
         return TokenResponse(
-            access_token=access_token,
+            access_token=tokens["access_token"],
+            refresh_token=tokens["refresh_token"],
             token_type="bearer",
+            expires_in=tokens["expires_in"],
             user_id=user.id,
             email=user.email,
             full_name=user.full_name,
@@ -334,19 +339,97 @@ async def login(
         user.last_login_ip = login_ip
         session.add(user)
         session.commit()
+        session.refresh(user)
 
         logger.info(f"🔐 用户登录: {email} (ID: {user.id})")
 
-        access_token = create_access_token(data={"sub": user.email, "user_id": user.id, "role": user.role})
+        ua = http_request.headers.get("user-agent", "") if http_request else ""
+        tokens = issue_token_pair(user, ip_address=login_ip, user_agent=ua)
         return TokenResponse(
-            access_token=access_token,
+            access_token=tokens["access_token"],
+            refresh_token=tokens["refresh_token"],
             token_type="bearer",
+            expires_in=tokens["expires_in"],
             user_id=user.id,
             email=user.email,
             full_name=user.full_name,
             role=user.role,
             credits=user.credits,
         )
+
+
+@router.post("/api/v1/auth/refresh", response_model=TokenResponse, summary="刷新 Token", tags=["auth"])
+async def refresh_token(request: RefreshTokenRequest, http_request: StarletteRequest):
+    """
+    使用 refresh_token 换取新的 access_token + refresh_token 对。
+    旧的 refresh_token 会被撤销（Token Rotation）。
+    """
+    from core.middleware import _get_client_ip
+
+    with Session(engine) as session:
+        rt = session.exec(
+            select(RefreshToken).where(
+                RefreshToken.token == request.refresh_token,
+                RefreshToken.revoked == False,
+            )
+        ).first()
+
+        if not rt:
+            raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+
+        try:
+            expires_at = datetime.fromisoformat(rt.expires_at.replace("Z", "+00:00"))
+            from datetime import timezone
+            if datetime.now(timezone.utc) > expires_at:
+                rt.revoked = True
+                session.add(rt)
+                session.commit()
+                raise HTTPException(status_code=401, detail="Refresh token expired")
+        except ValueError:
+            raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+        user = session.get(User, rt.user_id)
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+
+        rt.revoked = True
+        session.add(rt)
+        session.commit()
+
+    client_ip = _get_client_ip(http_request)
+    ua = http_request.headers.get("user-agent", "")
+    tokens = issue_token_pair(user, ip_address=client_ip, user_agent=ua)
+
+    logger.info(f"🔄 Token 已刷新: {user.email} (ID: {user.id})")
+
+    return TokenResponse(
+        access_token=tokens["access_token"],
+        refresh_token=tokens["refresh_token"],
+        token_type="bearer",
+        expires_in=tokens["expires_in"],
+        user_id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role,
+        credits=user.credits,
+    )
+
+
+@router.post("/api/v1/auth/logout", summary="登出（撤销 Refresh Token）", tags=["auth"])
+async def logout(request: RefreshTokenRequest):
+    """撤销指定的 refresh_token，使其无法再用于刷新。"""
+    with Session(engine) as session:
+        rt = session.exec(
+            select(RefreshToken).where(
+                RefreshToken.token == request.refresh_token,
+                RefreshToken.revoked == False,
+            )
+        ).first()
+        if rt:
+            rt.revoked = True
+            session.add(rt)
+            session.commit()
+    return {"message": "Logged out successfully"}
 
 
 @router.get("/api/v1/users/me", response_model=UserResponse, summary="获取当前用户信息", tags=["auth"])
@@ -594,6 +677,12 @@ async def delete_account(request: DeleteAccountRequest, current_user: User = Dep
         for v in verifications:
             session.delete(v)
 
+        refresh_tokens = session.exec(
+            select(RefreshToken).where(RefreshToken.user_id == current_user.id)
+        ).all()
+        for tok in refresh_tokens:
+            session.delete(tok)
+
         user = session.get(User, current_user.id)
         if user:
             session.delete(user)
@@ -602,6 +691,53 @@ async def delete_account(request: DeleteAccountRequest, current_user: User = Dep
         logger.info(f"🗑️ 用户账号已永久删除: {current_user.email} (ID: {current_user.id})")
 
     return {"message": "Your account and all associated data have been permanently deleted."}
+
+
+class RegisterPushTokenRequest(BaseModel):
+    """注册推送 token 请求"""
+    token: str = Field(..., description="Expo Push Token 或 FCM Token")
+    platform: str = Field(default="unknown", description="ios/android/web")
+
+
+@router.post("/api/v1/users/push-token", summary="注册推送通知 Token", tags=["users"])
+async def register_push_token(request: RegisterPushTokenRequest, current_user: User = Depends(get_current_user)):
+    """注册或更新推送通知 token，同一 token 不会重复注册。"""
+    with Session(engine) as session:
+        existing = session.exec(
+            select(PushToken).where(
+                PushToken.user_id == current_user.id,
+                PushToken.token == request.token,
+            )
+        ).first()
+        if existing:
+            existing.platform = request.platform
+            existing.updated_at = utc_iso_now()
+            session.add(existing)
+        else:
+            pt = PushToken(
+                user_id=current_user.id,
+                token=request.token,
+                platform=request.platform,
+            )
+            session.add(pt)
+        session.commit()
+    return {"message": "Push token registered"}
+
+
+@router.delete("/api/v1/users/push-token", summary="注销推送通知 Token", tags=["users"])
+async def unregister_push_token(request: RegisterPushTokenRequest, current_user: User = Depends(get_current_user)):
+    """注销推送通知 token。"""
+    with Session(engine) as session:
+        existing = session.exec(
+            select(PushToken).where(
+                PushToken.user_id == current_user.id,
+                PushToken.token == request.token,
+            )
+        ).first()
+        if existing:
+            session.delete(existing)
+            session.commit()
+    return {"message": "Push token unregistered"}
 
 
 class TopupRequest(BaseModel):

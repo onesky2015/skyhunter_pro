@@ -14,8 +14,19 @@ from starlette.responses import JSONResponse, RedirectResponse
 from sqlmodel import Session, select
 
 from config import (
-    APP_VERSION, APP_DESCRIPTION, CORS_ALLOWED_ORIGINS, API_BASE_URL, logger
+    APP_VERSION, APP_DESCRIPTION, CORS_ALLOWED_ORIGINS, API_BASE_URL, SENTRY_DSN, logger
 )
+
+if SENTRY_DSN:
+    import sentry_sdk
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        traces_sample_rate=0.1,
+        profiles_sample_rate=0.1,
+        environment="production" if not __debug__ else "development",
+        release=APP_VERSION,
+    )
+    logger.info(f"Sentry initialized (release={APP_VERSION})")
 from db import engine
 
 # Import services
@@ -41,6 +52,9 @@ def _run_migrations():
         ("ALTER TABLE users ADD COLUMN last_login_ip VARCHAR", "users.last_login_ip"),
         ("ALTER TABLE users ADD COLUMN totp_secret VARCHAR", "users.totp_secret"),
         ("ALTER TABLE users ADD COLUMN totp_enabled BOOLEAN DEFAULT FALSE", "users.totp_enabled"),
+        ("ALTER TABLE users ADD COLUMN auth_provider VARCHAR DEFAULT 'email'", "users.auth_provider"),
+        ("ALTER TABLE users ADD COLUMN apple_sub VARCHAR", "users.apple_sub"),
+        ("ALTER TABLE users ADD COLUMN google_sub VARCHAR", "users.google_sub"),
     ]
     for sql, desc in migrations:
         try:
@@ -137,11 +151,14 @@ async def track_booking_click(monitor_id: int):
         raise HTTPException(status_code=400, detail="No booking link available")
 
 # Import routers
-from routers import users, flights, admin, admin_analytics
+from routers import users, flights, admin, admin_analytics, oauth, legal, payments
 app.include_router(users.router)
 app.include_router(flights.router)
 app.include_router(admin.router)
 app.include_router(admin_analytics.router)
+app.include_router(oauth.router)
+app.include_router(legal.router)
+app.include_router(payments.router)
 
 if __name__ == "__main__":
     import uvicorn

@@ -3,13 +3,14 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from datetime import timedelta, datetime
 from typing import Optional
 from sqlmodel import Session, select
-from config import JWT_SECRET_KEY, JWT_ALGORITHM, JWT_EXPIRE_HOURS
+from config import JWT_SECRET_KEY, JWT_ALGORITHM, JWT_EXPIRE_HOURS, JWT_REFRESH_EXPIRE_DAYS
 from db import engine
 from models.database import User
 # ============================================================================
 # 认证依赖（passlib + python-jose）
 # ============================================================================
 
+import uuid
 import random
 from passlib.context import CryptContext
 from jose import JWTError, jwt
@@ -41,19 +42,56 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """
-    创建 JWT Access Token
-
-    Args:
-        data: 载荷数据，必须包含 "sub" (subject, 即 user email)
-        expires_delta: 过期时间增量
-
-    Returns:
-        编码后的 JWT 字符串
+    创建 JWT Access Token (短期，默认 1 小时)
     """
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(hours=JWT_EXPIRE_HOURS))
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "type": "access"})
     return jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+
+def create_refresh_token_value() -> str:
+    """生成唯一的 refresh token 字符串"""
+    return str(uuid.uuid4())
+
+
+def issue_token_pair(
+    user,
+    ip_address: Optional[str] = None,
+    user_agent: Optional[str] = None,
+) -> dict:
+    """
+    为用户签发 access_token + refresh_token 对。
+    refresh_token 会持久化到数据库。
+
+    Returns:
+        {"access_token": ..., "refresh_token": ..., "expires_in": seconds}
+    """
+    from models.database import RefreshToken, utc_iso_now
+
+    access_token = create_access_token(
+        data={"sub": user.email, "user_id": user.id, "role": user.role}
+    )
+
+    refresh_value = create_refresh_token_value()
+    expires_at = (datetime.utcnow() + timedelta(days=JWT_REFRESH_EXPIRE_DAYS)).isoformat() + "Z"
+
+    with Session(engine) as session:
+        rt = RefreshToken(
+            user_id=user.id,
+            token=refresh_value,
+            expires_at=expires_at,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+        session.add(rt)
+        session.commit()
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_value,
+        "expires_in": JWT_EXPIRE_HOURS * 3600,
+    }
 
 
 
