@@ -47,14 +47,19 @@
       "bundler": "metro"
     },
     "plugins": [
-      "expo-router"
+      "expo-router",
+      "@sentry/react-native"
     ],
     "extra": {
+      "googleWebClientId": "511232230562-brr7d7tg5ceqmtcjq0h1aldnijso1l8p.apps.googleusercontent.com",
+      "googleIosClientId": "511232230562-v3omoau22ch04bpesqjs60atkqri39mt.apps.googleusercontent.com",
+      "googleAndroidClientId": "511232230562-t7rt7ijcvir09cgs0uthgqlhh207tai3.apps.googleusercontent.com",
       "apiUrl": "https://api.skyhunter.app",
       "eas": {
-        "projectId": "YOUR_EAS_PROJECT_ID"
-      }
+        "projectId": "0d5fde14-f1ce-4b37-bd7a-82d28d09fd57"
+      },
+      "router": {}
     },
-    "owner": "skyhunter"
+    "owner": "changegim"
   }
 }

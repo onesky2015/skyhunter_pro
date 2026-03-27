@@ -253,6 +253,65 @@ async def quote_search(request: QuoteSearchRequest, current_user: User = Depends
 
 
 # ============================================================================
+# API 端点：热门航线推荐
+# ============================================================================
+
+class PopularFlight(BaseModel):
+    origin: str
+    destination: str
+    date: str
+    price: Optional[float]
+
+POPULAR_ROUTES = [
+    {"origin": "JFK", "destination": "LAX"},
+    {"origin": "JFK", "destination": "SFO"},
+    {"origin": "LHR", "destination": "JFK"},
+]
+
+_popular_cache = {"data": None, "updated_at": None}
+
+@router.get("/api/v1/flights/popular", response_model=List[PopularFlight], summary="获取热门航班推荐", tags=["flights"])
+async def get_popular_flights():
+    """获取热门航班路线及最优价格，强制1小时全局缓存。"""
+    now = datetime.utcnow()
+    # 第一步：检查 1 小时内存缓存
+    if _popular_cache["data"] and _popular_cache["updated_at"]:
+        if now - _popular_cache["updated_at"] < timedelta(hours=1):
+            return _popular_cache["data"]
+
+    # 第二步：如果无可用缓存，调取后续一周同一天的价格基准
+    check_date = date.today() + timedelta(days=7)
+    results = []
+    
+    for route in POPULAR_ROUTES:
+        origin = route["origin"]
+        dest = route["destination"]
+        
+        if USE_MOCK_DATA:
+            mock_data = _generate_mock_heatmap(origin, dest, check_date, 1, "economy")
+            price = mock_data[0]["price"] if mock_data and mock_data[0]["price"] else 399.0
+        else:
+            flight_data = _search_serpapi_single_day(
+                origin=origin, destination=dest, departure_date=check_date,
+                cabin_class="economy", adults=1, sort_strategy="best", bypass_cache=False
+            )
+            price = flight_data.get("price") if flight_data else None
+
+        results.append({
+            "origin": origin,
+            "destination": dest,
+            "date": check_date.isoformat(),
+            "price": price
+        })
+
+    # 更新缓存
+    _popular_cache["data"] = results
+    _popular_cache["updated_at"] = now
+    
+    return results
+
+
+# ============================================================================
 # API 端点：监控任务 CRUD（数据隔离）
 # ============================================================================
 

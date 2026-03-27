@@ -17,7 +17,7 @@
     "preview": {
       "distribution": "internal",
       "ios": {
-        "simulator": false
+        "simulator": true
       },
       "env": {
         "APP_ENV": "preview"

@@ -1,22 +1,27 @@
-// filename: app/_layout.tsx
 import React, { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useI18n } from '../i18n';
+import { ThemeProvider, useTheme, getStatusBarStyle } from '../theme';
+import { initSentry, wrapSentry } from '../utils/sentry';
 
-export default function RootLayout() {
+initSentry();
+
+function RootNavigator() {
   const { initLang } = useI18n();
+  const { theme } = useTheme();
+
   useEffect(() => {
-    initLang();
+    void initLang();
   }, [initLang]);
 
   return (
     <>
-      <StatusBar style="light" />
+      <StatusBar style={getStatusBarStyle(theme)} />
       <Stack
         screenOptions={{
           headerShown: false,
-          contentStyle: { backgroundColor: '#000000' },
+          contentStyle: { backgroundColor: theme.colors.background },
         }}
       >
         <Stack.Screen name="index" />
@@ -25,10 +30,21 @@ export default function RootLayout() {
         <Stack.Screen name="auth/signup" />
         <Stack.Screen name="auth/verify-email" />
         <Stack.Screen name="auth/forgot" />
+        <Stack.Screen name="settings" />
         <Stack.Screen name="legal" />
         <Stack.Screen name="purchase" />
       </Stack>
     </>
   );
 }
+
+function RootLayout() {
+  return (
+    <ThemeProvider>
+      <RootNavigator />
+    </ThemeProvider>
+  );
+}
+
+export default wrapSentry(RootLayout);
 

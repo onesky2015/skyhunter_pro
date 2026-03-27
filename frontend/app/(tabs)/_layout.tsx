@@ -1,28 +1,40 @@
 // filename: app/(tabs)/_layout.tsx
 import { Tabs } from 'expo-router';
-import { Text } from 'react-native';
+import { Image, Text } from 'react-native';
 import { useAuth } from '../../hooks/useAuth';
 import { usePushNotifications } from '../../hooks/usePushNotifications';
 import { useI18n } from '../../i18n';
+import { useTheme } from '../../theme';
+
+const eagleLogo = require('../../assets/eagle-logo.png');
 
 export default function TabsLayout() {
   const { t } = useI18n();
   const { userToken, handle401Error } = useAuth();
+  const { theme } = useTheme();
   usePushNotifications(userToken, handle401Error);
 
   return (
     <Tabs
+      initialRouteName="index"
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: '#000000',
-          borderTopColor: '#00FF00',
+          backgroundColor: theme.colors.tabBg,
+          borderTopColor: theme.colors.tabBorder,
           borderTopWidth: 1,
         },
-        tabBarActiveTintColor: '#00FF00',
-        tabBarInactiveTintColor: '#666666',
+        tabBarActiveTintColor: theme.colors.accent,
+        tabBarInactiveTintColor: theme.colors.tabInactive,
       }}
     >
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: t('dashboard', 'tabTitle'),
+          tabBarIcon: () => <Image source={eagleLogo} style={{ width: 20, height: 20, borderRadius: 5 }} resizeMode="contain" />,
+        }}
+      />
       <Tabs.Screen
         name="search"
         options={{

@@ -18,9 +18,14 @@ import { useAuth } from '../../hooks/useAuth';
 import { userApi, authApi } from '../../services/api';
 import { AdminPanel } from '../../components/AdminPanel';
 import { useI18n } from '../../i18n';
+import { useTheme, getShadowStyle } from '../../theme';
+
+const MAX_TOPUP = 5000;
 
 export default function ProfileScreen() {
   const { t, lang, setLang } = useI18n();
+  const { theme } = useTheme();
+  const styles = createStyles(theme);
   const router = useRouter();
   const { userInfo, userToken, logout, refreshUserInfo, handle401Error } = useAuth();
   const [topupLoading, setTopupLoading] = useState(false);
@@ -33,6 +38,8 @@ export default function ProfileScreen() {
   const [deleteAccVisible, setDeleteAccVisible] = useState(false);
   const [deleteAccPassword, setDeleteAccPassword] = useState('');
   const [deleteAccLoading, setDeleteAccLoading] = useState(false);
+  const [topupModalVisible, setTopupModalVisible] = useState(false);
+  const [topupAmountDraft, setTopupAmountDraft] = useState('');
 
   const handleTopup = async (amount: number = 50) => {
     if (!userToken) return;
@@ -41,11 +48,31 @@ export default function ProfileScreen() {
       const data = await userApi.topup(userToken, amount, handle401Error);
       Alert.alert(t('profile', 'topUpSuccess'), t('profile', 'topUpCreditsMsg').replace('{n}', String(data.credits_added)).replace('{total}', String(data.credits_total)));
       await refreshUserInfo();
+      setTopupModalVisible(false);
+      setTopupAmountDraft('');
     } catch (err: unknown) {
       Alert.alert(t('profile', 'topUpFailed'), err instanceof Error ? err.message : t('profile', 'unknownError'));
     } finally {
       setTopupLoading(false);
     }
+  };
+
+  const submitTopupFromModal = () => {
+    const raw = topupAmountDraft.trim().replace(/\s/g, '');
+    if (!raw) {
+      Alert.alert(t('common', 'error'), t('profile', 'topUpSelectOrEnter'));
+      return;
+    }
+    if (!/^\d+$/.test(raw)) {
+      Alert.alert(t('common', 'error'), t('profile', 'topUpInvalidAmount'));
+      return;
+    }
+    const amount = Number(raw);
+    if (!Number.isFinite(amount) || amount < 1 || amount > MAX_TOPUP) {
+      Alert.alert(t('common', 'error'), t('profile', 'topUpInvalidAmount'));
+      return;
+    }
+    void handleTopup(amount);
   };
 
   const handleChangePassword = async () => {
@@ -124,7 +151,7 @@ export default function ProfileScreen() {
   if (!userInfo) {
     return (
       <View style={styles.container}>
-        <ActivityIndicator size="large" color="#00FF00" />
+        <ActivityIndicator size="large" color={theme.colors.accent} />
       </View>
     );
   }
@@ -160,13 +187,16 @@ export default function ProfileScreen() {
 
         <TouchableOpacity
           style={[styles.topupButton, topupLoading && styles.topupButtonDisabled]}
-          onPress={() => handleTopup(50)}
+          onPress={() => {
+            setTopupAmountDraft('');
+            setTopupModalVisible(true);
+          }}
           disabled={topupLoading}
         >
           {topupLoading ? (
             <ActivityIndicator color="#000" />
           ) : (
-            <Text style={styles.topupButtonText}>{t('profile', 'topUp50')}</Text>
+            <Text style={styles.topupButtonText}>{t('profile', 'topUpOpen')}</Text>
           )}
         </TouchableOpacity>
       </View>
@@ -189,10 +219,16 @@ export default function ProfileScreen() {
           </TouchableOpacity>
         )}
         <TouchableOpacity
-          style={[styles.actionButton, { backgroundColor: '#333333', marginBottom: 12 }]}
+          style={[styles.actionButton, styles.changePwdButton]}
           onPress={() => setLang(lang === 'zh' ? 'en' : 'zh')}
         >
           <Text style={styles.actionButtonText}>🌐 {t('profile', 'language')}: {lang === 'zh' ? t('profile', 'chinese') : t('profile', 'english')}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.actionButton, styles.settingsButton]}
+          onPress={() => router.push('/settings')}
+        >
+          <Text style={styles.actionButtonText}>🎨 {t('settings', 'title').toUpperCase()}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.actionButton} onPress={handleLogout}>
           <Text style={styles.actionButtonText}>🚪 {t('auth', 'logout').toUpperCase()}</Text>
@@ -218,6 +254,72 @@ export default function ProfileScreen() {
           <Text style={styles.actionButtonText}>🗑️ {t('profile', 'deleteAccount').toUpperCase()}</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Mock 充值：选额 / 自定义（上限 MAX_TOPUP），完整支付见 /purchase */}
+      <Modal visible={topupModalVisible} transparent animationType="fade">
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>{t('profile', 'topUpModalTitle')}</Text>
+            <Text style={styles.topupHint}>
+              {t('profile', 'topUpHint').replace('{n}', String(MAX_TOPUP))}
+            </Text>
+            <View style={styles.topupPresetRow}>
+              <TouchableOpacity
+                style={styles.topupPresetBtn}
+                onPress={() => setTopupAmountDraft('100')}
+              >
+                <Text style={styles.topupPresetText}>{t('profile', 'topUpPreset100')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.topupPresetBtn}
+                onPress={() => setTopupAmountDraft('500')}
+              >
+                <Text style={styles.topupPresetText}>{t('profile', 'topUpPreset500')}</Text>
+              </TouchableOpacity>
+            </View>
+            <TextInput
+              style={styles.modalInput}
+              placeholder={t('profile', 'topUpCustomPlaceholder')}
+              placeholderTextColor="#666"
+              keyboardType="number-pad"
+              value={topupAmountDraft}
+              onChangeText={setTopupAmountDraft}
+            />
+            <TouchableOpacity
+              style={[styles.topupButton, { marginBottom: 12 }, topupLoading && styles.topupButtonDisabled]}
+              onPress={submitTopupFromModal}
+              disabled={topupLoading}
+            >
+              {topupLoading ? (
+                <ActivityIndicator color={theme.colors.accentText} />
+              ) : (
+                <Text style={styles.topupButtonText}>{t('profile', 'topUpConfirm')}</Text>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.actionButton, styles.changePwdButton]}
+              onPress={() => {
+                setTopupModalVisible(false);
+                router.push('/purchase');
+              }}
+            >
+              <Text style={styles.actionButtonText}>{t('profile', 'topUpOpenPurchase')}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.cancelTopupBtn}
+              onPress={() => {
+                setTopupModalVisible(false);
+                setTopupAmountDraft('');
+              }}
+            >
+              <Text style={styles.cancelTopupText}>{t('common', 'cancel')}</Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       {/* Change Password Modal */}
       <Modal visible={changePwdVisible} transparent animationType="slide">
@@ -272,7 +374,7 @@ export default function ProfileScreen() {
                 disabled={changePwdLoading}
               >
                 {changePwdLoading ? (
-                  <ActivityIndicator color="#000" size="small" />
+                  <ActivityIndicator color={theme.colors.accentText} size="small" />
                 ) : (
                   <Text style={[styles.modalButtonText, styles.modalButtonTextSubmit]}>{t('profile', 'submit')}</Text>
                 )}
@@ -289,8 +391,8 @@ export default function ProfileScreen() {
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
           <View style={styles.modalContent}>
-            <Text style={[styles.modalTitle, { color: '#FF4444' }]}>{t('profile', 'deleteAccount')}</Text>
-            <Text style={{ color: '#a1a1aa', fontSize: 13, marginBottom: 16, textAlign: 'center' }}>
+            <Text style={[styles.modalTitle, styles.deleteTitle]}>{t('profile', 'deleteAccount')}</Text>
+            <Text style={styles.deleteHint}>
               {t('profile', 'enterPasswordToDelete')}
             </Text>
             <TextInput
@@ -336,155 +438,206 @@ export default function ProfileScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000000',
-  },
-  content: {
-    padding: 16,
-  },
-  title: {
-    color: '#00FF00',
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 16,
-  },
-  card: {
-    backgroundColor: '#111111',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#333333',
-  },
-  cardTitle: {
-    color: '#00FF00',
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 12,
-    textTransform: 'uppercase',
-  },
-  infoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  label: {
-    color: '#666666',
-    fontSize: 14,
-  },
-  value: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  creditsValue: {
-    color: '#00FF00',
-    fontSize: 32,
-    fontWeight: '700',
-    textAlign: 'center',
-    marginVertical: 16,
-  },
-  creditsSubtext: {
-    color: '#666666',
-    fontSize: 12,
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  topupButton: {
-    backgroundColor: '#00FF00',
-    padding: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  topupButtonDisabled: {
-    opacity: 0.5,
-  },
-  topupButtonText: {
-    color: '#000000',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  actionButton: {
-    backgroundColor: '#FF4444',
-    padding: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  actionButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  adminButton: {
-    backgroundColor: '#FFD700',
-    marginBottom: 12,
-  },
-  changePwdButton: {
-    backgroundColor: '#333333',
-    marginBottom: 12,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  modalContent: {
-    backgroundColor: '#111111',
-    borderRadius: 12,
-    padding: 24,
-    borderWidth: 1,
-    borderColor: '#333333',
-  },
-  modalTitle: {
-    color: '#00FF00',
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 20,
-    textAlign: 'center',
-  },
-  modalInput: {
-    backgroundColor: '#222222',
-    borderRadius: 8,
-    padding: 14,
-    color: '#FFFFFF',
-    fontSize: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#444444',
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 8,
-  },
-  modalButton: {
-    flex: 1,
-    padding: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  modalButtonCancel: {
-    backgroundColor: '#444444',
-  },
-  modalButtonSubmit: {
-    backgroundColor: '#00FF00',
-  },
-  modalButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  modalButtonTextSubmit: {
-    color: '#000000',
-  },
-  deleteAccButton: {
-    backgroundColor: '#8B0000',
-    marginTop: 12,
-  },
-  deleteConfirmButton: {
-    backgroundColor: '#FF4444',
-  },
-});
+const createStyles = (theme: ReturnType<typeof useTheme>['theme']) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: theme.colors.background,
+    },
+    content: {
+      padding: 16,
+    },
+    title: {
+      color: theme.colors.accent,
+      fontSize: 20,
+      fontWeight: '700',
+      marginBottom: 16,
+    },
+    card: {
+      backgroundColor: theme.colors.surface,
+      borderRadius: theme.radius.md,
+      padding: 16,
+      marginBottom: 16,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      ...getShadowStyle(theme, theme.name === 'light' ? 0.8 : 1),
+    },
+    cardTitle: {
+      color: theme.colors.accent,
+      fontSize: 14,
+      fontWeight: '600',
+      marginBottom: 12,
+      textTransform: 'uppercase',
+    },
+    infoRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      marginBottom: 8,
+    },
+    label: {
+      color: theme.colors.textSoft,
+      fontSize: 14,
+    },
+    value: {
+      color: theme.colors.text,
+      fontSize: 14,
+      fontWeight: '600',
+    },
+    creditsValue: {
+      color: theme.colors.accent,
+      fontSize: 32,
+      fontWeight: '700',
+      textAlign: 'center',
+      marginVertical: 16,
+    },
+    creditsSubtext: {
+      color: theme.colors.textSoft,
+      fontSize: 12,
+      textAlign: 'center',
+      marginBottom: 16,
+    },
+    topupButton: {
+      backgroundColor: theme.colors.accent,
+      padding: 16,
+      borderRadius: theme.radius.sm,
+      alignItems: 'center',
+    },
+    topupButtonDisabled: {
+      opacity: 0.5,
+    },
+    topupButtonText: {
+      color: theme.colors.accentText,
+      fontSize: 16,
+      fontWeight: '700',
+    },
+    actionButton: {
+      backgroundColor: theme.colors.danger,
+      padding: 16,
+      borderRadius: theme.radius.sm,
+      alignItems: 'center',
+    },
+    actionButtonText: {
+      color: '#FFFFFF',
+      fontSize: 16,
+      fontWeight: '700',
+    },
+    adminButton: {
+      backgroundColor: theme.colors.warning,
+      marginBottom: 12,
+    },
+    changePwdButton: {
+      backgroundColor: theme.colors.surfaceMuted,
+      marginBottom: 12,
+    },
+    settingsButton: {
+      backgroundColor: theme.colors.accent,
+      marginBottom: 12,
+    },
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: theme.colors.overlay,
+      justifyContent: 'center',
+      padding: 24,
+    },
+    modalContent: {
+      backgroundColor: theme.colors.surface,
+      borderRadius: theme.radius.md,
+      padding: 24,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      ...getShadowStyle(theme, 1),
+    },
+    modalTitle: {
+      color: theme.colors.accent,
+      fontSize: 18,
+      fontWeight: '700',
+      marginBottom: 20,
+      textAlign: 'center',
+    },
+    modalInput: {
+      backgroundColor: theme.colors.inputBg,
+      borderRadius: theme.radius.sm,
+      padding: 14,
+      color: theme.colors.text,
+      fontSize: 16,
+      marginBottom: 12,
+      borderWidth: 1,
+      borderColor: theme.colors.inputBorder,
+    },
+    modalButtons: {
+      flexDirection: 'row',
+      gap: 12,
+      marginTop: 8,
+    },
+    modalButton: {
+      flex: 1,
+      padding: 14,
+      borderRadius: theme.radius.sm,
+      alignItems: 'center',
+    },
+    modalButtonCancel: {
+      backgroundColor: theme.colors.surfaceMuted,
+    },
+    modalButtonSubmit: {
+      backgroundColor: theme.colors.accent,
+    },
+    modalButtonText: {
+      color: theme.colors.text,
+      fontSize: 16,
+      fontWeight: '600',
+    },
+    modalButtonTextSubmit: {
+      color: theme.colors.accentText,
+    },
+    deleteAccButton: {
+      backgroundColor: '#8B0000',
+      marginTop: 12,
+    },
+    deleteConfirmButton: {
+      backgroundColor: theme.colors.danger,
+    },
+    deleteTitle: {
+      color: theme.colors.danger,
+    },
+    deleteHint: {
+      color: theme.colors.textMuted,
+      fontSize: 13,
+      marginBottom: 16,
+      textAlign: 'center',
+    },
+    topupHint: {
+      color: theme.colors.textMuted,
+      fontSize: 12,
+      textAlign: 'center',
+      marginBottom: 16,
+      lineHeight: 18,
+    },
+    topupPresetRow: {
+      flexDirection: 'row',
+      gap: 12,
+      marginBottom: 12,
+    },
+    topupPresetBtn: {
+      flex: 1,
+      backgroundColor: theme.colors.surfaceMuted,
+      paddingVertical: 12,
+      borderRadius: theme.radius.sm,
+      borderWidth: 1,
+      borderColor: theme.colors.borderStrong,
+      alignItems: 'center',
+    },
+    topupPresetText: {
+      color: theme.colors.accent,
+      fontSize: 15,
+      fontWeight: '700',
+    },
+    cancelTopupBtn: {
+      paddingVertical: 12,
+      alignItems: 'center',
+      marginTop: 4,
+    },
+    cancelTopupText: {
+      color: theme.colors.textMuted,
+      fontSize: 14,
+    },
+  });

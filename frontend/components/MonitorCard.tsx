@@ -1,9 +1,11 @@
 // filename: components/MonitorCard.tsx
 import React, { useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Platform, Alert, ActivityIndicator } from 'react-native';
+import { BlurView } from 'expo-blur';
 import { MonitorTask, TaskReportItem } from '../types';
 import { formatPrice, timeAgoLocalized, getFrequencyBadge, remainingTimeLocalized, formatDateTime } from '../constants/utils';
 import { useI18n } from '../i18n';
+import { useTheme, getShadowStyle } from '../theme';
 
 interface MonitorCardProps {
   task: MonitorTask;
@@ -26,6 +28,8 @@ export const MonitorCard: React.FC<MonitorCardProps> = ({
   onFetchReport,
 }) => {
   const { t } = useI18n();
+  const { theme } = useTheme();
+  const styles = createStyles(theme);
   const [reportExpanded, setReportExpanded] = useState(false);
   const [reportData, setReportData] = useState<TaskReportItem[] | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
@@ -51,8 +55,17 @@ export const MonitorCard: React.FC<MonitorCardProps> = ({
   const isExpired = task.status === 'expired';
   const isPaused = task.status === 'paused';
   const isArchived = task.status === 'archived';
-  const borderColor = isFound ? '#00FF00' : isExpired ? '#666' : isPaused ? '#888' : isArchived ? '#555' : '#EAB308';
+  const borderColor = isFound
+    ? theme.colors.success
+    : isExpired
+      ? theme.colors.textSoft
+      : isPaused
+        ? theme.colors.textMuted
+        : isArchived
+          ? theme.colors.textSoft
+          : theme.colors.warning;
   const isRoundTrip = task.trip_type === 'round_trip';
+  const isGlass = theme.name === 'glass';
 
   const handleLongPress = useCallback(() => {
     if (onLongPress) {
@@ -76,8 +89,8 @@ export const MonitorCard: React.FC<MonitorCardProps> = ({
     }
   }, [onLongPress, onDelete, task.id, task.origin, task.destination, t]);
 
-  return (
-    <View style={[styles.card, { borderLeftColor: borderColor }]}>
+  const cardBody = (
+    <>
       <TouchableOpacity
         style={styles.cardContent}
         onPress={onPress}
@@ -322,7 +335,7 @@ export const MonitorCard: React.FC<MonitorCardProps> = ({
       {reportExpanded && (
         <View style={styles.reportPanel}>
           {reportLoading ? (
-            <ActivityIndicator size="small" color="#00FF00" style={{ marginVertical: 16 }} />
+            <ActivityIndicator size="small" color={theme.colors.accent} style={{ marginVertical: 16 }} />
           ) : reportData && reportData.length > 0 ? (
             <View style={styles.reportList}>
               {reportData.map((item, i) => (
@@ -358,345 +371,373 @@ export const MonitorCard: React.FC<MonitorCardProps> = ({
           )}
         </View>
       )}
+    </>
+  );
+
+  return (
+    <View style={[styles.cardWrapper, isGlass && styles.cardWrapperGlass]}>
+      {isGlass ? (
+        <BlurView
+          intensity={theme.effects.blurIntensity}
+          tint={theme.effects.blurTint}
+          style={[styles.card, styles.glassCard, { borderLeftColor: borderColor }]}
+        >
+          {cardBody}
+        </BlurView>
+      ) : (
+        <View style={[styles.card, { borderLeftColor: borderColor }]}>
+          {cardBody}
+        </View>
+      )}
     </View>
   );
 };
 
-const styles = StyleSheet.create({
-  card: {
-    backgroundColor: '#111111',
-    borderRadius: 12,
-    marginBottom: 12,
-    borderLeftWidth: 4,
-    overflow: 'hidden',
-  },
-  cardContent: {
-    flexDirection: 'row',
-    padding: 16,
-  },
-  leftSection: {
-    flex: 1,
-  },
-  rightSection: {
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    marginLeft: 12,
-  },
-  routeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 4,
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  indexText: {
-    color: '#666666',
-    fontSize: 12,
-    fontWeight: '600',
-    minWidth: 28,
-  },
-  routeText: {
-    color: '#00FF00',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  roundTripBadge: {
-    backgroundColor: '#00FF00',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    marginLeft: 8,
-  },
-  roundTripBadgeText: {
-    color: '#000000',
-    fontSize: 8,
-    fontWeight: '700',
-  },
-  dateText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    marginBottom: 4,
-  },
-  metaText: {
-    color: '#999999',
-    fontSize: 11,
-    marginBottom: 8,
-  },
-  filterTagsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 4,
-    marginBottom: 8,
-  },
-  filterTag: {
-    backgroundColor: '#222222',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  filterTagText: {
-    color: '#00FF00',
-    fontSize: 9,
-  },
-  baggageText: {
-    color: '#666666',
-    fontSize: 10,
-    marginBottom: 4,
-  },
-  checkedText: {
-    color: '#666666',
-    fontSize: 10,
-  },
-  priceText: {
-    color: '#00FF00',
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 4,
-  },
-  airlineText: {
-    color: '#999999',
-    fontSize: 10,
-    marginBottom: 8,
-  },
-  badgeFound: {
-    backgroundColor: '#00FF00',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-    marginBottom: 8,
-  },
-  badgeFoundText: {
-    color: '#000000',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  badgeExpired: {
-    backgroundColor: '#666666',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-    marginBottom: 8,
-  },
-  badgeExpiredText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  badgePaused: {
-    backgroundColor: '#888888',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-    marginBottom: 8,
-  },
-  badgePausedText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  badgeScanning: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#EAB308',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-    marginBottom: 8,
-  },
-  scanningDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#000000',
-    marginRight: 4,
-  },
-  badgeScanningText: {
-    color: '#000000',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  pauseResumeButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 6,
-    minWidth: 80,
-    alignItems: 'center',
-  },
-  pauseButton: {
-    backgroundColor: '#FFD700',
-  },
-  resumeButton: {
-    backgroundColor: '#00FF00',
-  },
-  pauseResumeText: {
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  pauseText: {
-    color: '#000000',
-  },
-  resumeText: {
-    color: '#000000',
-  },
-  // Phase 2: Frequency/Time/Credit badges
-  badgeRow: {
-    flexDirection: 'row',
-    gap: 6,
-    marginBottom: 6,
-    flexWrap: 'wrap',
-  },
-  freqBadge: {
-    backgroundColor: '#1A1A2E',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: '#00FF00',
-  },
-  freqBadgeText: {
-    color: '#00FF00',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  timeBadge: {
-    backgroundColor: '#2E2E1A',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: '#EAB308',
-  },
-  timeBadgeText: {
-    color: '#EAB308',
-    fontSize: 10,
-    fontWeight: '600',
-  },
-  creditBadge: {
-    backgroundColor: '#1A2E1A',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 4,
-  },
-  creditBadgeText: {
-    color: '#999999',
-    fontSize: 10,
-    fontWeight: '600',
-  },
-  badgeArchived: {
-    backgroundColor: '#555555',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-    marginBottom: 8,
-  },
-  badgeArchivedText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  archiveButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 6,
-    minWidth: 80,
-    alignItems: 'center',
-    backgroundColor: '#555555',
-    marginTop: 4,
-  },
-  archiveButtonText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  // 价格详情块
-  priceDetailBlock: {
-    backgroundColor: '#1A1A1A',
-    padding: 10,
-    borderRadius: 8,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#333333',
-  },
-  priceDetailTitle: {
-    color: '#00FF00',
-    fontSize: 12,
-    fontWeight: '700',
-    marginBottom: 6,
-  },
-  priceDetailRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 4,
-  },
-  priceDetailLabel: {
-    color: '#999999',
-    fontSize: 11,
-  },
-  priceDetailValue: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  emailNotified: {
-    color: '#00FF00',
-  },
-  // 任务报告
-  reportToggle: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    backgroundColor: '#0D0D0D',
-    borderTopWidth: 1,
-    borderTopColor: '#222222',
-  },
-  reportToggleText: {
-    color: '#00FF00',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  reportToggleArrow: {
-    color: '#666666',
-    fontSize: 12,
-  },
-  reportPanel: {
-    backgroundColor: '#0A0A0A',
-    padding: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#222222',
-    maxHeight: 200,
-  },
-  reportList: {
-    gap: 8,
-  },
-  reportItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: '#1A1A1A',
-  },
-  reportItemTime: {
-    color: '#666666',
-    fontSize: 10,
-    minWidth: 70,
-  },
-  reportItemType: {
-    color: '#00FF00',
-    fontSize: 11,
-    flex: 1,
-  },
-  reportItemDelta: {
-    color: '#999999',
-    fontSize: 10,
-  },
-  reportEmpty: {
-    color: '#666666',
-    fontSize: 12,
-    textAlign: 'center',
-    paddingVertical: 16,
-  },
-});
+const createStyles = (theme: ReturnType<typeof useTheme>['theme']) =>
+  StyleSheet.create({
+    cardWrapper: {
+      marginBottom: 12,
+      borderRadius: theme.radius.md,
+      ...getShadowStyle(theme, theme.name === 'light' ? 0.7 : 1),
+    },
+    cardWrapperGlass: {
+      shadowOffset: { width: 0, height: 10 },
+    },
+    card: {
+      backgroundColor: theme.colors.surface,
+      borderRadius: theme.radius.md,
+      borderLeftWidth: 4,
+      overflow: 'hidden',
+      borderWidth: theme.name === 'glass' ? 1 : 0,
+      borderColor: theme.colors.borderStrong,
+    },
+    glassCard: {
+      backgroundColor: theme.colors.surface,
+    },
+    cardContent: {
+      flexDirection: 'row',
+      padding: 16,
+    },
+    leftSection: {
+      flex: 1,
+    },
+    rightSection: {
+      alignItems: 'flex-end',
+      justifyContent: 'space-between',
+      marginLeft: 12,
+    },
+    routeRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 4,
+      flexWrap: 'wrap',
+      gap: 6,
+    },
+    indexText: {
+      color: theme.colors.textSoft,
+      fontSize: 12,
+      fontWeight: '600',
+      minWidth: 28,
+    },
+    routeText: {
+      color: theme.colors.accent,
+      fontSize: 18,
+      fontWeight: '700',
+    },
+    roundTripBadge: {
+      backgroundColor: theme.colors.accent,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 4,
+      marginLeft: 8,
+    },
+    roundTripBadgeText: {
+      color: theme.colors.accentText,
+      fontSize: 8,
+      fontWeight: '700',
+    },
+    dateText: {
+      color: theme.colors.text,
+      fontSize: 12,
+      marginBottom: 4,
+    },
+    metaText: {
+      color: theme.colors.textMuted,
+      fontSize: 11,
+      marginBottom: 8,
+    },
+    filterTagsRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 4,
+      marginBottom: 8,
+    },
+    filterTag: {
+      backgroundColor: theme.colors.surfaceMuted,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 4,
+    },
+    filterTagText: {
+      color: theme.colors.accent,
+      fontSize: 9,
+    },
+    baggageText: {
+      color: theme.colors.textSoft,
+      fontSize: 10,
+      marginBottom: 4,
+    },
+    checkedText: {
+      color: theme.colors.textSoft,
+      fontSize: 10,
+    },
+    priceText: {
+      color: theme.colors.accent,
+      fontSize: 18,
+      fontWeight: '700',
+      marginBottom: 4,
+    },
+    airlineText: {
+      color: theme.colors.textMuted,
+      fontSize: 10,
+      marginBottom: 8,
+    },
+    badgeFound: {
+      backgroundColor: theme.colors.success,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 4,
+      marginBottom: 8,
+    },
+    badgeFoundText: {
+      color: theme.colors.accentText,
+      fontSize: 10,
+      fontWeight: '700',
+    },
+    badgeExpired: {
+      backgroundColor: theme.colors.textSoft,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 4,
+      marginBottom: 8,
+    },
+    badgeExpiredText: {
+      color: theme.colors.text,
+      fontSize: 10,
+      fontWeight: '700',
+    },
+    badgePaused: {
+      backgroundColor: theme.colors.textMuted,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 4,
+      marginBottom: 8,
+    },
+    badgePausedText: {
+      color: theme.colors.accentText,
+      fontSize: 10,
+      fontWeight: '700',
+    },
+    badgeScanning: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: theme.colors.warning,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 4,
+      marginBottom: 8,
+    },
+    scanningDot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+      backgroundColor: theme.colors.accentText,
+      marginRight: 4,
+    },
+    badgeScanningText: {
+      color: theme.colors.accentText,
+      fontSize: 10,
+      fontWeight: '700',
+    },
+    pauseResumeButton: {
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 6,
+      minWidth: 80,
+      alignItems: 'center',
+    },
+    pauseButton: {
+      backgroundColor: theme.colors.warning,
+    },
+    resumeButton: {
+      backgroundColor: theme.colors.accent,
+    },
+    pauseResumeText: {
+      fontSize: 10,
+      fontWeight: '700',
+    },
+    pauseText: {
+      color: theme.colors.accentText,
+    },
+    resumeText: {
+      color: theme.colors.accentText,
+    },
+    badgeRow: {
+      flexDirection: 'row',
+      gap: 6,
+      marginBottom: 6,
+      flexWrap: 'wrap',
+    },
+    freqBadge: {
+      backgroundColor: theme.colors.surfaceAlt,
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 4,
+      borderWidth: 1,
+      borderColor: theme.colors.borderStrong,
+    },
+    freqBadgeText: {
+      color: theme.colors.accent,
+      fontSize: 10,
+      fontWeight: '700',
+    },
+    timeBadge: {
+      backgroundColor: theme.colors.surfaceAlt,
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 4,
+      borderWidth: 1,
+      borderColor: theme.colors.warning,
+    },
+    timeBadgeText: {
+      color: theme.colors.warning,
+      fontSize: 10,
+      fontWeight: '600',
+    },
+    creditBadge: {
+      backgroundColor: theme.colors.surfaceAlt,
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 4,
+    },
+    creditBadgeText: {
+      color: theme.colors.textMuted,
+      fontSize: 10,
+      fontWeight: '600',
+    },
+    badgeArchived: {
+      backgroundColor: theme.colors.textSoft,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 4,
+      marginBottom: 8,
+    },
+    badgeArchivedText: {
+      color: theme.colors.text,
+      fontSize: 10,
+      fontWeight: '700',
+    },
+    archiveButton: {
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 6,
+      minWidth: 80,
+      alignItems: 'center',
+      backgroundColor: theme.colors.textSoft,
+      marginTop: 4,
+    },
+    archiveButtonText: {
+      color: theme.colors.text,
+      fontSize: 10,
+      fontWeight: '700',
+    },
+    priceDetailBlock: {
+      backgroundColor: theme.colors.surfaceAlt,
+      padding: 10,
+      borderRadius: theme.radius.sm,
+      marginBottom: 10,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    priceDetailTitle: {
+      color: theme.colors.accent,
+      fontSize: 12,
+      fontWeight: '700',
+      marginBottom: 6,
+    },
+    priceDetailRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      marginBottom: 4,
+    },
+    priceDetailLabel: {
+      color: theme.colors.textMuted,
+      fontSize: 11,
+    },
+    priceDetailValue: {
+      color: theme.colors.text,
+      fontSize: 11,
+      fontWeight: '600',
+    },
+    emailNotified: {
+      color: theme.colors.success,
+    },
+    reportToggle: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: 10,
+      paddingHorizontal: 16,
+      backgroundColor: theme.colors.surfaceAlt,
+      borderTopWidth: 1,
+      borderTopColor: theme.colors.border,
+    },
+    reportToggleText: {
+      color: theme.colors.accent,
+      fontSize: 12,
+      fontWeight: '600',
+    },
+    reportToggleArrow: {
+      color: theme.colors.textSoft,
+      fontSize: 12,
+    },
+    reportPanel: {
+      backgroundColor: theme.colors.surfaceAlt,
+      padding: 12,
+      borderTopWidth: 1,
+      borderTopColor: theme.colors.border,
+      maxHeight: 200,
+    },
+    reportList: {
+      gap: 8,
+    },
+    reportItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingVertical: 4,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.colors.border,
+    },
+    reportItemTime: {
+      color: theme.colors.textSoft,
+      fontSize: 10,
+      minWidth: 70,
+    },
+    reportItemType: {
+      color: theme.colors.accent,
+      fontSize: 11,
+      flex: 1,
+    },
+    reportItemDelta: {
+      color: theme.colors.textMuted,
+      fontSize: 10,
+    },
+    reportEmpty: {
+      color: theme.colors.textSoft,
+      fontSize: 12,
+      textAlign: 'center',
+      paddingVertical: 16,
+    },
+  });
 

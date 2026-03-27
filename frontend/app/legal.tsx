@@ -11,11 +11,14 @@ import {
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { API_URL } from '../constants/api';
 import { useI18n } from '../i18n';
+import { useTheme } from '../theme';
 
 type LegalTab = 'privacy' | 'terms';
 
 export default function LegalScreen() {
   const { t } = useI18n();
+  const { theme } = useTheme();
+  const styles = createStyles(theme);
   const router = useRouter();
   const params = useLocalSearchParams<{ tab?: string }>();
   const [activeTab, setActiveTab] = useState<LegalTab>(
@@ -43,7 +46,7 @@ export default function LegalScreen() {
       }
     };
     fetchDoc();
-  }, [activeTab]);
+  }, [activeTab, t]);
 
   const renderMarkdown = (md: string) => {
     const lines = md.split('\n');
@@ -103,7 +106,7 @@ export default function LegalScreen() {
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
         {loading ? (
-          <ActivityIndicator color="#00FF00" size="large" style={{ marginTop: 40 }} />
+          <ActivityIndicator color={theme.colors.accent} size="large" style={{ marginTop: 40 }} />
         ) : (
           renderMarkdown(content)
         )}
@@ -112,80 +115,84 @@ export default function LegalScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000000' },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 56,
-    paddingBottom: 12,
-    backgroundColor: '#111111',
-    borderBottomWidth: 1,
-    borderBottomColor: '#222',
-  },
-  backBtn: { width: 60 },
-  backText: { color: '#00FF00', fontSize: 14 },
-  headerTitle: { color: '#00FF00', fontSize: 18, fontWeight: '700' },
-  tabs: {
-    flexDirection: 'row',
-    backgroundColor: '#111111',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    gap: 8,
-  },
-  tab: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 8,
-    backgroundColor: '#222222',
-    alignItems: 'center',
-  },
-  tabActive: {
-    backgroundColor: '#00FF00',
-  },
-  tabText: {
-    color: '#999',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  tabTextActive: {
-    color: '#000000',
-  },
-  scroll: { flex: 1 },
-  scrollContent: { padding: 20, paddingBottom: 40 },
-  h1: {
-    color: '#00FF00',
-    fontSize: 22,
-    fontWeight: '700',
-    marginBottom: 12,
-    marginTop: 8,
-  },
-  h2: {
-    color: '#00FF00',
-    fontSize: 17,
-    fontWeight: '600',
-    marginBottom: 8,
-    marginTop: 16,
-  },
-  bold: {
-    color: '#CCCCCC',
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  body: {
-    color: '#AAAAAA',
-    fontSize: 14,
-    lineHeight: 22,
-    marginBottom: 4,
-  },
-  listItem: {
-    color: '#AAAAAA',
-    fontSize: 14,
-    lineHeight: 22,
-    marginBottom: 2,
-    paddingLeft: 8,
-  },
-});
+const createStyles = (theme: ReturnType<typeof useTheme>['theme']) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: theme.colors.background },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingTop: 56,
+      paddingBottom: 12,
+      backgroundColor: theme.colors.surface,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.colors.border,
+    },
+    backBtn: { width: 60 },
+    backText: { color: theme.colors.accent, fontSize: 14 },
+    headerTitle: { color: theme.colors.accent, fontSize: 18, fontWeight: '700' },
+    tabs: {
+      flexDirection: 'row',
+      backgroundColor: theme.colors.surface,
+      paddingHorizontal: 16,
+      paddingBottom: 12,
+      gap: 8,
+    },
+    tab: {
+      flex: 1,
+      paddingVertical: 10,
+      borderRadius: theme.radius.sm,
+      backgroundColor: theme.colors.surfaceMuted,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    tabActive: {
+      backgroundColor: theme.colors.accent,
+      borderColor: theme.colors.accent,
+    },
+    tabText: {
+      color: theme.colors.textMuted,
+      fontSize: 13,
+      fontWeight: '600',
+    },
+    tabTextActive: {
+      color: theme.colors.accentText,
+    },
+    scroll: { flex: 1 },
+    scrollContent: { padding: 20, paddingBottom: 40 },
+    h1: {
+      color: theme.colors.accent,
+      fontSize: 22,
+      fontWeight: '700',
+      marginBottom: 12,
+      marginTop: 8,
+    },
+    h2: {
+      color: theme.colors.accent,
+      fontSize: 17,
+      fontWeight: '600',
+      marginBottom: 8,
+      marginTop: 16,
+    },
+    bold: {
+      color: theme.colors.text,
+      fontSize: 14,
+      fontWeight: '600',
+      marginBottom: 4,
+    },
+    body: {
+      color: theme.colors.textMuted,
+      fontSize: 14,
+      lineHeight: 22,
+      marginBottom: 4,
+    },
+    listItem: {
+      color: theme.colors.textMuted,
+      fontSize: 14,
+      lineHeight: 22,
+      marginBottom: 2,
+      paddingLeft: 8,
+    },
+  });

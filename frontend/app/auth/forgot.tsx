@@ -11,10 +11,13 @@ import {
 import { useRouter } from 'expo-router';
 import { authApi } from '../../services/api';
 import { useI18n } from '../../i18n';
+import { useTheme, getShadowStyle } from '../../theme';
 
 export default function ForgotScreen() {
   const { t } = useI18n();
   const router = useRouter();
+  const { theme } = useTheme();
+  const styles = createStyles(theme);
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -90,7 +93,7 @@ export default function ForgotScreen() {
               disabled={loading}
             >
               {loading ? (
-                <ActivityIndicator color="#000" />
+                <ActivityIndicator color={theme.colors.accentText} />
               ) : (
                 <Text style={styles.buttonText}>{t('auth', 'sendCode')}</Text>
               )}
@@ -131,7 +134,7 @@ export default function ForgotScreen() {
               disabled={loading}
             >
               {loading ? (
-                <ActivityIndicator color="#000" />
+                <ActivityIndicator color={theme.colors.accentText} />
               ) : (
                 <Text style={styles.buttonText}>{t('auth', 'resetPassword')}</Text>
               )}
@@ -165,105 +168,107 @@ export default function ForgotScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000000',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 16,
-  },
-  card: {
-    width: '100%',
-    maxWidth: 400,
-    backgroundColor: '#111111',
-    borderRadius: 12,
-    padding: 24,
-    borderWidth: 1,
-    borderColor: '#00FF00',
-  },
-  title: {
-    color: '#00FF00',
-    fontSize: 24,
-    fontWeight: '700',
-    textAlign: 'center',
-    marginBottom: 24,
-  },
-  label: {
-    color: '#00FF00',
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 8,
-    textTransform: 'uppercase',
-  },
-  input: {
-    backgroundColor: '#222222',
-    color: '#FFFFFF',
-    padding: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#333333',
-    fontSize: 16,
-    marginBottom: 16,
-  },
-  button: {
-    backgroundColor: '#00FF00',
-    padding: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  buttonDisabled: {
-    opacity: 0.5,
-  },
-  buttonText: {
-    color: '#000000',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  message: {
-    color: '#00FF00',
-    fontSize: 14,
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  errorText: {
-    color: '#FF4444',
-    fontSize: 14,
-    textAlign: 'center',
-    marginBottom: 16,
-    backgroundColor: 'rgba(255,68,68,0.1)',
-    padding: 10,
-    borderRadius: 8,
-  },
-  successBox: {
-    alignItems: 'center',
-    paddingVertical: 16,
-  },
-  successIcon: {
-    fontSize: 48,
-    marginBottom: 12,
-  },
-  successTitle: {
-    color: '#00FF00',
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  successSub: {
-    color: '#a1a1aa',
-    fontSize: 14,
-    marginBottom: 20,
-    textAlign: 'center',
-  },
-  footer: {
-    marginTop: 24,
-    alignItems: 'center',
-  },
-  linkText: {
-    color: '#00FF00',
-    fontSize: 14,
-    textDecorationLine: 'underline',
-  },
-});
+const createStyles = (theme: ReturnType<typeof useTheme>['theme']) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: theme.colors.background,
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 16,
+    },
+    card: {
+      width: '100%',
+      maxWidth: 400,
+      backgroundColor: theme.colors.surface,
+      borderRadius: theme.radius.md,
+      padding: 24,
+      borderWidth: 1,
+      borderColor: theme.colors.borderStrong,
+      ...getShadowStyle(theme, theme.name === 'light' ? 0.7 : 1),
+    },
+    title: {
+      color: theme.colors.accent,
+      fontSize: 24,
+      fontWeight: '700',
+      textAlign: 'center',
+      marginBottom: 24,
+    },
+    label: {
+      color: theme.colors.accent,
+      fontSize: 12,
+      fontWeight: '600',
+      marginBottom: 8,
+      textTransform: 'uppercase',
+    },
+    input: {
+      backgroundColor: theme.colors.inputBg,
+      color: theme.colors.text,
+      padding: 12,
+      borderRadius: theme.radius.sm,
+      borderWidth: 1,
+      borderColor: theme.colors.inputBorder,
+      fontSize: 16,
+      marginBottom: 16,
+    },
+    button: {
+      backgroundColor: theme.colors.accent,
+      padding: 16,
+      borderRadius: theme.radius.sm,
+      alignItems: 'center',
+      marginTop: 8,
+    },
+    buttonDisabled: {
+      opacity: 0.5,
+    },
+    buttonText: {
+      color: theme.colors.accentText,
+      fontSize: 16,
+      fontWeight: '700',
+    },
+    message: {
+      color: theme.colors.success,
+      fontSize: 14,
+      textAlign: 'center',
+      marginBottom: 16,
+    },
+    errorText: {
+      color: theme.colors.danger,
+      fontSize: 14,
+      textAlign: 'center',
+      marginBottom: 16,
+      backgroundColor: `${theme.colors.danger}22`,
+      padding: 10,
+      borderRadius: theme.radius.sm,
+    },
+    successBox: {
+      alignItems: 'center',
+      paddingVertical: 16,
+    },
+    successIcon: {
+      fontSize: 48,
+      marginBottom: 12,
+    },
+    successTitle: {
+      color: theme.colors.success,
+      fontSize: 18,
+      fontWeight: '700',
+      marginBottom: 8,
+      textAlign: 'center',
+    },
+    successSub: {
+      color: theme.colors.textMuted,
+      fontSize: 14,
+      marginBottom: 20,
+      textAlign: 'center',
+    },
+    footer: {
+      marginTop: 24,
+      alignItems: 'center',
+    },
+    linkText: {
+      color: theme.colors.accent,
+      fontSize: 14,
+      textDecorationLine: 'underline',
+    },
+  });

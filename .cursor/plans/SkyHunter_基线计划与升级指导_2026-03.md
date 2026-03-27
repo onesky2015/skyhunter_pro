@@ -27,12 +27,12 @@ isProject: false
 | 维度 | 完成度 | 说明 |
 |------|--------|------|
 | 核心业务 | ~95% | 搜索、监控、计费、通知链路完整 |
-| 认证与安全 | ~90% | JWT + Refresh + OAuth 代码完成，OAuth 需配置 |
-| 支付体系 | ~85% | IAP/Stripe 代码完成，需商店与 Stripe 配置 |
+| 认证与安全 | ~95% | JWT + Refresh + OAuth 代码（Apple/Google）已全面完成，需平台账号配置生效 |
+| 支付体系 | ~85% | IAP/Stripe 代码完成（前端仅 mock），需商店与 Stripe 配置配置、查重 |
 | 生产化 | ~80% | Docker/Alembic/Sentry 已配置，需首次迁移与 DSN |
-| 体验增强 | ~40% | i18n 框架有，未全页面接入；主题/Telegram 等未做 |
+| 体验增强 | ~60% | 添加了 3 套主题（Tactical/Light/Glass），其余待完善（如 i18n、Telegram） |
 
-**总体估算**：约 **75–80%** 完成。
+**总体估算**：约 **80–85%** 完成。
 
 ---
 
@@ -70,9 +70,10 @@ isProject: false
 | 认证 | Refresh Token 自动刷新 | `services/api.ts` | 401 时自动重试 |
 | 认证 | OAuth 按钮 (Apple/Google) | `app/auth/login.tsx` | 需配置 OAuth |
 | 法律 | 隐私政策/服务条款页面 | `app/legal.tsx` | 双 Tab |
-| 购买 | 积分购买页 | `app/purchase.tsx` | 按平台选 IAP/Stripe |
+| 购买 | 积分购买页 | `app/purchase.tsx` | 按平台选 IAP/Stripe（当前 mock）|
 | 推送 | 推送注册 Hook | `hooks/usePushNotifications.ts` | 登录后自动注册 |
 | 国际化 | 中/英翻译 + useI18n | `i18n/en.ts`, `i18n/zh.ts` | 未全页面接入 |
+| 体验 | 3个主题切换选项 | `theme/themes.ts`, `app/settings.tsx`| 已实现（Tactical/Light/Glass）|
 | 构建 | EAS 配置 | `eas.json`, `app.json` | 需填 Project ID |
 
 ### 3.3 Web SaaS (Next.js)
@@ -135,7 +136,6 @@ isProject: false
 |------|------|------------|
 | Telegram 通知 | Bot API + 前端绑定 | 2–3 天 |
 | 价格历史折线图 | 前端图表组件 | 2 天 |
-| 深色/浅色主题切换 | 主题上下文 + 全局变量 | 2–3 天 |
 | Zustand 状态管理 | 重构 hooks → store | 3–4 天 |
 | 周报邮件 | 定时任务 + 模板 | 2 天 |
 
@@ -177,16 +177,16 @@ isProject: false
 ### 7.1 上架前必做
 
 1. 配置 Apple/Google OAuth、IAP、Stripe、EAS Project ID
-2. 完成「新监控任务UI修复计划」中的日期范围与航司选择器
-3. 生成并执行 Alembic 首次迁移
+2. ~~完成「新监控任务UI修复计划」中的日期范围与航司选择器~~ (已修复)
+3. ~~生成并执行 Alembic 首次迁移~~ (已生成并执行)
 4. 真机测试推送通知
 5. 按 `docs/STORE_SUBMISSION_GUIDE.md` 准备商店素材
 
 ### 7.2 上架后首月
 
 1. i18n 全页面接入
-2. Google Play 收据验证
-3. Sentry 接入并监控
+2. ~~Google Play 收据验证~~ (后端已实现并补充 API 校验)
+3. ~~Sentry 接入并监控~~ (前端拦截、后端 init 均已配置)
 4. 通知偏好页面
 
 ### 7.3 中长期
@@ -194,8 +194,7 @@ isProject: false
 1. pytest 测试套件
 2. Telegram 通知
 3. 价格历史折线图
-4. 主题切换
-5. Zustand 重构
+4. Zustand 重构
 
 ---
 

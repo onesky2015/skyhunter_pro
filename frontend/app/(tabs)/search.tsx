@@ -26,9 +26,12 @@ import { OriginDestInput } from '../../components/OriginDestInput';
 import { getDefaultStartDate, getDefaultReturnDate, minutesToTimeStr, calculateSearchCost } from '../../constants/utils';
 import { SearchRequestOptions } from '../../types';
 import { useI18n } from '../../i18n';
+import { useTheme, getShadowStyle } from '../../theme';
 
 export default function SearchScreen() {
   const { t } = useI18n();
+  const { theme } = useTheme();
+  const styles = createStyles(theme);
   const router = useRouter();
   const { userToken, userInfo, isAuthenticated, handle401Error, refreshUserInfo } = useAuth();
   const { createMonitor } = useMonitors(userToken, handle401Error, refreshUserInfo);
@@ -233,7 +236,7 @@ export default function SearchScreen() {
           disabled={loading}
         >
           {loading ? (
-            <ActivityIndicator color="#000" />
+            <ActivityIndicator color={theme.colors.accentText} />
           ) : (
             <Text style={styles.searchButtonText}>
               {searchMode === 'fixed'
@@ -343,207 +346,210 @@ export default function SearchScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000000',
-  },
-  content: {
-    padding: 16,
-  },
-  searchCard: {
-    backgroundColor: '#111111',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#00FF00',
-    overflow: 'visible' as const,
-    zIndex: 10,
-  },
-  title: {
-    color: '#00FF00',
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 16,
-    textAlign: 'center',
-  },
-  modeToggle: {
-    flexDirection: 'row',
-    marginBottom: 16,
-    gap: 8,
-  },
-  modeButton: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 8,
-    backgroundColor: '#222222',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#333333',
-  },
-  modeButtonActive: {
-    backgroundColor: '#00FF00',
-    borderColor: '#00FF00',
-  },
-  inputGroup: {
-    flex: 1,
-    marginBottom: 12,
-  },
-  inputLabel: {
-    color: '#00FF00',
-    fontSize: 10,
-    fontWeight: '600',
-    marginBottom: 4,
-    textTransform: 'uppercase',
-  },
-  input: {
-    backgroundColor: '#222222',
-    color: '#FFFFFF',
-    padding: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#333333',
-    fontSize: 14,
-  },
-  searchButton: {
-    backgroundColor: '#00FF00',
-    padding: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 8,
-    marginBottom: 8,
-  },
-  searchButtonDisabled: {
-    opacity: 0.5,
-  },
-  searchButtonText: {
-    color: '#000000',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  costText: {
-    color: '#666666',
-    fontSize: 12,
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  creditsText: {
-    color: '#00FF00',
-    fontSize: 14,
-    textAlign: 'center',
-    fontWeight: '600',
-  },
-  errorCard: {
-    backgroundColor: '#FF4444',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 16,
-  },
-  errorText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-  },
-  resultsCard: {
-    backgroundColor: '#111111',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#333333',
-  },
-  resultsTitle: {
-    color: '#00FF00',
-    fontSize: 16,
-    fontWeight: '700',
-    marginBottom: 8,
-  },
-  resultsSubtitle: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    marginBottom: 16,
-  },
-  flightCard: {
-    backgroundColor: '#222222',
-    padding: 12,
-    borderRadius: 8,
-    marginTop: 16,
-  },
-  flightTitle: {
-    color: '#00FF00',
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  flightText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    marginBottom: 4,
-  },
-  // Phase 2: Passenger Stepper
-  passengerRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 12,
-  },
-  passengerGroup: {
-    flex: 1,
-  },
-  stepperRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#222222',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#333333',
-  },
-  stepperBtn: {
-    width: 40,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#333333',
-    borderRadius: 8,
-  },
-  stepperBtnText: {
-    color: '#00FF00',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  stepperValue: {
-    flex: 1,
-    textAlign: 'center',
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  // Phase 2: Cabin Selector
-  cabinRow: {
-    flexDirection: 'row',
-    gap: 6,
-    marginBottom: 12,
-    flexWrap: 'wrap',
-  },
-  cabinButton: {
-    flex: 1,
-    minWidth: 70,
-    padding: 8,
-    borderRadius: 8,
-    backgroundColor: '#222222',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#333333',
-  },
-  cabinButtonActive: {
-    backgroundColor: '#00FF00',
-    borderColor: '#00FF00',
-  },
-  cabinText: {
-    color: '#666666',
-    fontSize: 10,
-    fontWeight: '600',
-  },
-  cabinTextActive: {
-    color: '#000000',
-  },
-});
+const createStyles = (theme: ReturnType<typeof useTheme>['theme']) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: theme.colors.background,
+    },
+    content: {
+      padding: 16,
+    },
+    searchCard: {
+      backgroundColor: theme.colors.surface,
+      borderRadius: theme.radius.md,
+      padding: 16,
+      marginBottom: 16,
+      borderWidth: 1,
+      borderColor: theme.colors.borderStrong,
+      overflow: 'visible' as const,
+      zIndex: 10,
+      ...getShadowStyle(theme, theme.name === 'light' ? 0.8 : 1),
+    },
+    title: {
+      color: theme.colors.accent,
+      fontSize: 18,
+      fontWeight: '700',
+      marginBottom: 16,
+      textAlign: 'center',
+    },
+    modeToggle: {
+      flexDirection: 'row',
+      marginBottom: 16,
+      gap: 8,
+    },
+    modeButton: {
+      flex: 1,
+      padding: 12,
+      borderRadius: theme.radius.sm,
+      backgroundColor: theme.colors.surfaceMuted,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    modeButtonActive: {
+      backgroundColor: theme.colors.accent,
+      borderColor: theme.colors.accent,
+    },
+    inputGroup: {
+      flex: 1,
+      marginBottom: 12,
+    },
+    inputLabel: {
+      color: theme.colors.accent,
+      fontSize: 10,
+      fontWeight: '600',
+      marginBottom: 4,
+      textTransform: 'uppercase',
+    },
+    input: {
+      backgroundColor: theme.colors.inputBg,
+      color: theme.colors.text,
+      padding: 12,
+      borderRadius: theme.radius.sm,
+      borderWidth: 1,
+      borderColor: theme.colors.inputBorder,
+      fontSize: 14,
+    },
+    searchButton: {
+      backgroundColor: theme.colors.accent,
+      padding: 16,
+      borderRadius: theme.radius.sm,
+      alignItems: 'center',
+      marginTop: 8,
+      marginBottom: 8,
+    },
+    searchButtonDisabled: {
+      opacity: 0.5,
+    },
+    searchButtonText: {
+      color: theme.colors.accentText,
+      fontSize: 16,
+      fontWeight: '700',
+    },
+    costText: {
+      color: theme.colors.textSoft,
+      fontSize: 12,
+      textAlign: 'center',
+      marginBottom: 8,
+    },
+    creditsText: {
+      color: theme.colors.accent,
+      fontSize: 14,
+      textAlign: 'center',
+      fontWeight: '600',
+    },
+    errorCard: {
+      backgroundColor: theme.colors.danger,
+      padding: 12,
+      borderRadius: theme.radius.sm,
+      marginBottom: 16,
+    },
+    errorText: {
+      color: '#FFFFFF',
+      fontSize: 14,
+    },
+    resultsCard: {
+      backgroundColor: theme.colors.surface,
+      borderRadius: theme.radius.md,
+      padding: 16,
+      marginBottom: 16,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      ...getShadowStyle(theme, theme.name === 'light' ? 0.7 : 1),
+    },
+    resultsTitle: {
+      color: theme.colors.accent,
+      fontSize: 16,
+      fontWeight: '700',
+      marginBottom: 8,
+    },
+    resultsSubtitle: {
+      color: theme.colors.text,
+      fontSize: 14,
+      marginBottom: 16,
+    },
+    flightCard: {
+      backgroundColor: theme.colors.surfaceMuted,
+      padding: 12,
+      borderRadius: theme.radius.sm,
+      marginTop: 16,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    flightTitle: {
+      color: theme.colors.accent,
+      fontSize: 14,
+      fontWeight: '600',
+      marginBottom: 8,
+    },
+    flightText: {
+      color: theme.colors.text,
+      fontSize: 12,
+      marginBottom: 4,
+    },
+    passengerRow: {
+      flexDirection: 'row',
+      gap: 12,
+      marginBottom: 12,
+    },
+    passengerGroup: {
+      flex: 1,
+    },
+    stepperRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: theme.colors.inputBg,
+      borderRadius: theme.radius.sm,
+      borderWidth: 1,
+      borderColor: theme.colors.inputBorder,
+    },
+    stepperBtn: {
+      width: 40,
+      height: 40,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.colors.surfaceMuted,
+      borderRadius: theme.radius.sm,
+    },
+    stepperBtnText: {
+      color: theme.colors.accent,
+      fontSize: 18,
+      fontWeight: '700',
+    },
+    stepperValue: {
+      flex: 1,
+      textAlign: 'center',
+      color: theme.colors.text,
+      fontSize: 16,
+      fontWeight: '700',
+    },
+    cabinRow: {
+      flexDirection: 'row',
+      gap: 6,
+      marginBottom: 12,
+      flexWrap: 'wrap',
+    },
+    cabinButton: {
+      flex: 1,
+      minWidth: 70,
+      padding: 8,
+      borderRadius: theme.radius.sm,
+      backgroundColor: theme.colors.surfaceMuted,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    cabinButtonActive: {
+      backgroundColor: theme.colors.accent,
+      borderColor: theme.colors.accent,
+    },
+    cabinText: {
+      color: theme.colors.textSoft,
+      fontSize: 10,
+      fontWeight: '600',
+    },
+    cabinTextActive: {
+      color: theme.colors.accentText,
+    },
+  });

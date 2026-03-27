@@ -20,6 +20,7 @@ import { DatePicker } from './DatePicker';
 import { MonitorTask, MonitorUpdatePayload } from '../types';
 import { FREQUENCY_OPTIONS, DURATION_OPTIONS, getFrequencyBadge, calculateFrequencyChangeCost, calculateMonitorCost } from '../constants/utils';
 import { useI18n } from '../i18n';
+import { useTheme, getShadowStyle } from '../theme';
 
 interface EditMonitorModalProps {
   visible: boolean;
@@ -39,6 +40,8 @@ export const EditMonitorModal: React.FC<EditMonitorModalProps> = ({
   onTopUp,
 }) => {
   const { t } = useI18n();
+  const { theme } = useTheme();
+  const styles = createStyles(theme);
   const [targetPrice, setTargetPrice] = useState('');
   const [email, setEmail] = useState('');
   const [startDate, setStartDate] = useState('');
@@ -400,7 +403,7 @@ export const EditMonitorModal: React.FC<EditMonitorModalProps> = ({
                 disabled={submitting}
               >
                 {submitting ? (
-                  <ActivityIndicator color="#000" />
+                  <ActivityIndicator color={theme.colors.accentText} />
                 ) : (
                   <Text style={styles.submitButtonText}>{t('common', 'save').toUpperCase()}</Text>
                 )}
@@ -413,206 +416,211 @@ export const EditMonitorModal: React.FC<EditMonitorModalProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-    justifyContent: 'flex-end',
-  },
-  scrollContent: {
-    padding: 16,
-  },
-  modal: {
-    backgroundColor: '#111111',
-    borderRadius: 16,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: '#00FF00',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  title: {
-    color: '#00FF00',
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  closeButton: {
-    color: '#FFFFFF',
-    fontSize: 24,
-    fontWeight: '700',
-  },
-  routeText: {
-    color: '#00FF00',
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 20,
-    textAlign: 'center',
-  },
-  lockedInfoBox: {
-    backgroundColor: '#171717',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#333333',
-    padding: 12,
-    marginBottom: 16,
-  },
-  lockedInfoText: {
-    color: '#a3a3a3',
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  label: {
-    color: '#00FF00',
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 12,
-    marginBottom: 8,
-    textTransform: 'uppercase',
-  },
-  inputGroup: {
-    marginBottom: 12,
-  },
-  input: {
-    backgroundColor: '#222222',
-    color: '#FFFFFF',
-    padding: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#333333',
-    fontSize: 16,
-    marginBottom: 12,
-  },
-  infoBox: {
-    backgroundColor: '#222222',
-    padding: 12,
-    borderRadius: 8,
-    marginTop: 8,
-    marginBottom: 20,
-  },
-  infoText: {
-    color: '#999999',
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  buttons: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  cancelButton: {
-    flex: 1,
-    backgroundColor: '#333333',
-    padding: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  cancelButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  submitButton: {
-    flex: 1,
-    backgroundColor: '#00FF00',
-    padding: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  submitButtonDisabled: {
-    opacity: 0.5,
-  },
-  submitButtonText: {
-    color: '#000000',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  // Phase 2: Frequency selector
-  frequencyGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 12,
-  },
-  frequencyButton: {
-    width: '31%',
-    padding: 10,
-    borderRadius: 8,
-    backgroundColor: '#222222',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#333333',
-  },
-  frequencyButtonActive: {
-    backgroundColor: '#00FF00',
-    borderColor: '#00FF00',
-  },
-  frequencyEmoji: {
-    fontSize: 16,
-    marginBottom: 2,
-  },
-  frequencyLabel: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  frequencyLabelActive: {
-    color: '#000000',
-  },
-  warningBox: {
-    backgroundColor: '#2E2E1A',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#EAB308',
-  },
-  warningText: {
-    color: '#EAB308',
-    fontSize: 11,
-    lineHeight: 16,
-  },
-  currentEndDate: {
-    color: '#888888',
-    fontSize: 11,
-    marginBottom: 8,
-  },
-  durationGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 12,
-  },
-  durationButton: {
-    width: '31%',
-    padding: 10,
-    borderRadius: 8,
-    backgroundColor: '#222222',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#333333',
-  },
-  durationButtonActive: {
-    backgroundColor: '#00FF00',
-    borderColor: '#00FF00',
-  },
-  durationLabel: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  durationLabelActive: {
-    color: '#000000',
-  },
-  durationCost: {
-    color: '#888888',
-    fontSize: 9,
-    marginTop: 2,
-  },
-  durationCostActive: {
-    color: '#000000',
-  },
-});
+const createStyles = (theme: ReturnType<typeof useTheme>['theme']) =>
+  StyleSheet.create({
+    overlay: {
+      flex: 1,
+      backgroundColor: theme.colors.overlay,
+      justifyContent: 'flex-end',
+    },
+    scrollContent: {
+      padding: 16,
+    },
+    modal: {
+      backgroundColor: theme.colors.surface,
+      borderRadius: theme.radius.lg,
+      padding: 20,
+      borderWidth: 1,
+      borderColor: theme.colors.borderStrong,
+      ...getShadowStyle(theme, 1),
+    },
+    header: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 16,
+    },
+    title: {
+      color: theme.colors.accent,
+      fontSize: 20,
+      fontWeight: '700',
+    },
+    closeButton: {
+      color: theme.colors.text,
+      fontSize: 24,
+      fontWeight: '700',
+    },
+    routeText: {
+      color: theme.colors.accent,
+      fontSize: 18,
+      fontWeight: '700',
+      marginBottom: 20,
+      textAlign: 'center',
+    },
+    lockedInfoBox: {
+      backgroundColor: theme.colors.surfaceAlt,
+      borderRadius: theme.radius.sm,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      padding: 12,
+      marginBottom: 16,
+    },
+    lockedInfoText: {
+      color: theme.colors.textMuted,
+      fontSize: 12,
+      lineHeight: 18,
+    },
+    label: {
+      color: theme.colors.accent,
+      fontSize: 12,
+      fontWeight: '600',
+      marginTop: 12,
+      marginBottom: 8,
+      textTransform: 'uppercase',
+    },
+    inputGroup: {
+      marginBottom: 12,
+    },
+    input: {
+      backgroundColor: theme.colors.inputBg,
+      color: theme.colors.text,
+      padding: 12,
+      borderRadius: theme.radius.sm,
+      borderWidth: 1,
+      borderColor: theme.colors.inputBorder,
+      fontSize: 16,
+      marginBottom: 12,
+    },
+    infoBox: {
+      backgroundColor: theme.colors.surfaceAlt,
+      padding: 12,
+      borderRadius: theme.radius.sm,
+      marginTop: 8,
+      marginBottom: 20,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    infoText: {
+      color: theme.colors.textMuted,
+      fontSize: 12,
+      lineHeight: 18,
+    },
+    buttons: {
+      flexDirection: 'row',
+      gap: 12,
+    },
+    cancelButton: {
+      flex: 1,
+      backgroundColor: theme.colors.surfaceMuted,
+      padding: 16,
+      borderRadius: theme.radius.sm,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    cancelButtonText: {
+      color: theme.colors.text,
+      fontSize: 16,
+      fontWeight: '700',
+    },
+    submitButton: {
+      flex: 1,
+      backgroundColor: theme.colors.accent,
+      padding: 16,
+      borderRadius: theme.radius.sm,
+      alignItems: 'center',
+    },
+    submitButtonDisabled: {
+      opacity: 0.5,
+    },
+    submitButtonText: {
+      color: theme.colors.accentText,
+      fontSize: 16,
+      fontWeight: '700',
+    },
+    frequencyGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginBottom: 12,
+    },
+    frequencyButton: {
+      width: '31%',
+      padding: 10,
+      borderRadius: theme.radius.sm,
+      backgroundColor: theme.colors.surfaceMuted,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    frequencyButtonActive: {
+      backgroundColor: theme.colors.accent,
+      borderColor: theme.colors.accent,
+    },
+    frequencyEmoji: {
+      fontSize: 16,
+      marginBottom: 2,
+    },
+    frequencyLabel: {
+      color: theme.colors.text,
+      fontSize: 10,
+      fontWeight: '700',
+    },
+    frequencyLabelActive: {
+      color: theme.colors.accentText,
+    },
+    warningBox: {
+      backgroundColor: `${theme.colors.warning}22`,
+      padding: 12,
+      borderRadius: theme.radius.sm,
+      marginBottom: 12,
+      borderWidth: 1,
+      borderColor: theme.colors.warning,
+    },
+    warningText: {
+      color: theme.colors.warning,
+      fontSize: 11,
+      lineHeight: 16,
+    },
+    currentEndDate: {
+      color: theme.colors.textSoft,
+      fontSize: 11,
+      marginBottom: 8,
+    },
+    durationGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginBottom: 12,
+    },
+    durationButton: {
+      width: '31%',
+      padding: 10,
+      borderRadius: theme.radius.sm,
+      backgroundColor: theme.colors.surfaceMuted,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    durationButtonActive: {
+      backgroundColor: theme.colors.accent,
+      borderColor: theme.colors.accent,
+    },
+    durationLabel: {
+      color: theme.colors.text,
+      fontSize: 10,
+      fontWeight: '700',
+    },
+    durationLabelActive: {
+      color: theme.colors.accentText,
+    },
+    durationCost: {
+      color: theme.colors.textSoft,
+      fontSize: 9,
+      marginTop: 2,
+    },
+    durationCostActive: {
+      color: theme.colors.accentText,
+    },
+  });
 

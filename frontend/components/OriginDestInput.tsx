@@ -12,6 +12,7 @@ import {
 import { AirportSearchResult } from '../types';
 import { airportApi } from '../services/api';
 import { t } from '../i18n';
+import { useTheme } from '../theme';
 
 interface OriginDestProps {
   origin: string;
@@ -37,6 +38,8 @@ const AirportInput: React.FC<AirportInputProps> = ({
   onSelect,
   zIndex = 1,
 }) => {
+  const { theme } = useTheme();
+  const styles = createStyles(theme);
   const [inputText, setInputText] = useState(value);
   const [suggestions, setSuggestions] = useState<AirportSearchResult[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
@@ -185,6 +188,9 @@ export const OriginDestInput: React.FC<OriginDestProps> = ({
   destination,
   setDestination,
 }) => {
+  const { theme } = useTheme();
+  const styles = createStyles(theme);
+
   return (
     <View style={styles.row}>
       <AirportInput
@@ -205,93 +211,94 @@ export const OriginDestInput: React.FC<OriginDestProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 12,
-    zIndex: 10,
-  },
-  halfInput: {
-    flex: 1,
-    position: 'relative',
-  },
-  label: {
-    color: '#00FF00',
-    fontSize: 10,
-    fontWeight: '600',
-    marginBottom: 4,
-    textTransform: 'uppercase',
-  },
-  input: {
-    backgroundColor: '#222222',
-    color: '#FFFFFF',
-    padding: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#333333',
-    fontSize: 14,
-  },
-  dropdown: {
-    position: 'absolute',
-    top: '100%',
-    left: 0,
-    right: 0,
-    backgroundColor: '#1A1A1A',
-    borderWidth: 1,
-    borderColor: '#00FF00',
-    borderRadius: 8,
-    marginTop: 4,
-    maxHeight: 240,
-    ...(Platform.OS === 'web'
-      ? { boxShadow: '0 8px 24px rgba(0, 255, 0, 0.15)' }
-      : {
-          shadowColor: '#00FF00',
-          shadowOffset: { width: 0, height: 4 },
-          shadowOpacity: 0.2,
-          shadowRadius: 8,
-          elevation: 8,
-        }),
-  },
-  dropdownList: {
-    maxHeight: 236,
-  },
-  suggestionItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#2A2A2A',
-  },
-  suggestionLeft: {
-    width: 52,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  iataCode: {
-    color: '#00FF00',
-    fontSize: 14,
-    fontWeight: '700',
-    fontFamily: Platform.OS === 'web' ? 'monospace' : undefined,
-  },
-  typeIcon: {
-    fontSize: 10,
-  },
-  suggestionRight: {
-    flex: 1,
-    marginLeft: 8,
-  },
-  airportName: {
-    color: '#CCCCCC',
-    fontSize: 12,
-    lineHeight: 16,
-  },
-  cityCountry: {
-    color: '#888888',
-    fontSize: 11,
-    lineHeight: 14,
-    marginTop: 1,
-  },
-});
+const createStyles = (theme: ReturnType<typeof useTheme>['theme']) =>
+  StyleSheet.create({
+    row: {
+      flexDirection: 'row',
+      gap: 12,
+      marginBottom: 12,
+      zIndex: 10,
+    },
+    halfInput: {
+      flex: 1,
+      position: 'relative',
+    },
+    label: {
+      color: theme.colors.accent,
+      fontSize: 10,
+      fontWeight: '600',
+      marginBottom: 4,
+      textTransform: 'uppercase',
+    },
+    input: {
+      backgroundColor: theme.colors.inputBg,
+      color: theme.colors.text,
+      padding: 12,
+      borderRadius: theme.radius.sm,
+      borderWidth: 1,
+      borderColor: theme.colors.inputBorder,
+      fontSize: 14,
+    },
+    dropdown: {
+      position: 'absolute',
+      top: '100%',
+      left: 0,
+      right: 0,
+      backgroundColor: theme.colors.surface,
+      borderWidth: 1,
+      borderColor: theme.colors.borderStrong,
+      borderRadius: theme.radius.sm,
+      marginTop: 4,
+      maxHeight: 240,
+      ...(Platform.OS === 'web'
+        ? { boxShadow: `0 8px 24px ${theme.colors.overlay}` }
+        : {
+            shadowColor: theme.colors.shadow,
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.2,
+            shadowRadius: 8,
+            elevation: 8,
+          }),
+    },
+    dropdownList: {
+      maxHeight: 236,
+    },
+    suggestionItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.colors.border,
+    },
+    suggestionLeft: {
+      width: 52,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+    },
+    iataCode: {
+      color: theme.colors.accent,
+      fontSize: 14,
+      fontWeight: '700',
+      fontFamily: Platform.OS === 'web' ? 'monospace' : undefined,
+    },
+    typeIcon: {
+      fontSize: 10,
+    },
+    suggestionRight: {
+      flex: 1,
+      marginLeft: 8,
+    },
+    airportName: {
+      color: theme.colors.textMuted,
+      fontSize: 12,
+      lineHeight: 16,
+    },
+    cityCountry: {
+      color: theme.colors.textSoft,
+      fontSize: 11,
+      lineHeight: 14,
+      marginTop: 1,
+    },
+  });

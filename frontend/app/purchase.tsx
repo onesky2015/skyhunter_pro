@@ -11,11 +11,24 @@ import {
   Platform,
   Linking,
 } from 'react-native';
+import type {
+  Purchase,
+  PurchaseError
+} from 'react-native-iap';
+import {
+  initConnection,
+  endConnection,
+  requestPurchase,
+  purchaseUpdatedListener,
+  purchaseErrorListener,
+  finishTransaction
+} from '../utils/iap';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../hooks/useAuth';
 import { API_URL } from '../constants/api';
 import { apiRequest } from '../services/api';
 import { useI18n } from '../i18n';
+import { useTheme, getShadowStyle } from '../theme';
 
 interface CreditProduct {
   product_id: string;
@@ -25,6 +38,8 @@ interface CreditProduct {
 
 export default function PurchaseScreen() {
   const { t } = useI18n();
+  const { theme } = useTheme();
+  const styles = createStyles(theme);
   const router = useRouter();
   const { userToken, userInfo, refreshUserInfo, handle401Error } = useAuth();
   const [products, setProducts] = useState<CreditProduct[]>([]);
@@ -33,7 +48,76 @@ export default function PurchaseScreen() {
 
   useEffect(() => {
     fetchProducts();
-  }, []);
+
+    let purchaseUpdateSubscription: any = null;
+    let purchaseErrorSubscription: any = null;
+
+    if (Platform.OS !== 'web') {
+      const initIAP = async () => {
+        try {
+          await initConnection();
+        } catch (err) {
+          console.warn('IAP Initialization Error:', err);
+        }
+      };
+      initIAP();
+      
+      purchaseUpdateSubscription = purchaseUpdatedListener(
+        async (purchase: Purchase) => {
+          const isApple = Platform.OS === 'ios';
+          const receipt = isApple ? (purchase as any).transactionReceipt : (purchase as any).purchaseToken;
+          
+          if (receipt) {
+            try {
+              // Send receipt to backend to verify
+              const verifyUrl = isApple ? '/api/v1/payments/apple/verify' : '/api/v1/payments/google/verify';
+              
+              const payload = isApple 
+                ? { receipt_data: receipt, product_id: purchase.productId }
+                : { purchase_token: receipt, product_id: purchase.productId };
+                
+              const resp = await apiRequest(
+                verifyUrl,
+                { method: 'POST', body: JSON.stringify(payload) },
+                userToken,
+                handle401Error
+              );
+              
+              if (resp.ok) {
+                Alert.alert(t('common', 'success') || 'Success', t('purchase', 'creditsAdded') || 'Credits added!');
+                await finishTransaction({ purchase, isConsumable: true });
+                await refreshUserInfo();
+              } else {
+                const errData = await resp.json().catch(() => null);
+                throw new Error(errData?.detail || 'Verification failed');
+              }
+            } catch (err: any) {
+              Alert.alert('Verification Error', err.message);
+            } finally {
+              setPurchasing(null);
+            }
+          }
+        }
+      );
+      
+      purchaseErrorSubscription = purchaseErrorListener(
+        (error: PurchaseError) => {
+           setPurchasing(null);
+           if (error.code && String(error.code) !== 'E_USER_CANCELLED') {
+             Alert.alert('Purchase Error', error.message);
+           }
+        }
+      );
+    }
+
+    return () => {
+      if (purchaseUpdateSubscription) purchaseUpdateSubscription.remove();
+      if (purchaseErrorSubscription) purchaseErrorSubscription.remove();
+      if (Platform.OS !== 'web') {
+        endConnection();
+      }
+    };
+  }, [userToken]);
 
   const fetchProducts = async () => {
     try {
@@ -88,28 +172,30 @@ export default function PurchaseScreen() {
   const handleAppleIAP = async (product: CreditProduct) => {
     setPurchasing(product.product_id);
     try {
-      Alert.alert(
-        'Apple IAP',
-        'In-App Purchase will be available after App Store review. Please use mock topup for now.',
-      );
+      await requestPurchase({
+        request: { apple: { sku: product.product_id } },
+        type: 'in-app'
+      });
     } catch (err: any) {
-      Alert.alert('Purchase Error', err?.message || 'Failed');
-    } finally {
       setPurchasing(null);
+      if (err.code && String(err.code) !== 'E_USER_CANCELLED') {
+        Alert.alert('Purchase Error', err?.message || 'Failed');
+      }
     }
   };
 
   const handleGooglePlay = async (product: CreditProduct) => {
     setPurchasing(product.product_id);
     try {
-      Alert.alert(
-        'Google Play',
-        'Google Play Billing will be available after Play Store review. Please use mock topup for now.',
-      );
+      await requestPurchase({
+        request: { google: { skus: [product.product_id] } },
+        type: 'in-app'
+      });
     } catch (err: any) {
-      Alert.alert('Purchase Error', err?.message || 'Failed');
-    } finally {
       setPurchasing(null);
+      if (err.code && String(err.code) !== 'E_USER_CANCELLED') {
+        Alert.alert('Purchase Error', err?.message || 'Failed');
+      }
     }
   };
 
@@ -130,7 +216,7 @@ export default function PurchaseScreen() {
         </View>
 
         {loading ? (
-          <ActivityIndicator color="#00FF00" size="large" style={{ marginTop: 40 }} />
+          <ActivityIndicator color={theme.colors.accent} size="large" style={{ marginTop: 40 }} />
         ) : (
           products.map((product) => (
             <TouchableOpacity
@@ -147,7 +233,7 @@ export default function PurchaseScreen() {
                 <Text style={styles.productPrice}>${product.price_usd.toFixed(2)}</Text>
               </View>
               {purchasing === product.product_id ? (
-                <ActivityIndicator color="#000" size="small" />
+                <ActivityIndicator color={theme.colors.accentText} size="small" />
               ) : (
                 <Text style={styles.buyText}>{t('purchase', 'buy')}</Text>
               )}
@@ -167,64 +253,67 @@ export default function PurchaseScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000000' },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 56,
-    paddingBottom: 12,
-    backgroundColor: '#111111',
-    borderBottomWidth: 1,
-    borderBottomColor: '#222',
-  },
-  backBtn: { width: 60 },
-  backText: { color: '#00FF00', fontSize: 14 },
-  headerTitle: { color: '#00FF00', fontSize: 18, fontWeight: '700' },
-  content: { padding: 16 },
-  balanceCard: {
-    backgroundColor: '#111111',
-    borderRadius: 12,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: '#00FF00',
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  balanceLabel: { color: '#999', fontSize: 13, marginBottom: 4 },
-  balanceValue: { color: '#00FF00', fontSize: 28, fontWeight: '700' },
-  productCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#111111',
-    borderRadius: 12,
-    padding: 18,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#333',
-  },
-  productCardActive: { borderColor: '#00FF00' },
-  productInfo: { flex: 1 },
-  productCredits: { color: '#FFFFFF', fontSize: 18, fontWeight: '700' },
-  productPrice: { color: '#00FF00', fontSize: 15, marginTop: 4 },
-  buyText: {
-    color: '#000000',
-    backgroundColor: '#00FF00',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-    fontWeight: '700',
-    fontSize: 14,
-    overflow: 'hidden',
-  },
-  note: {
-    color: '#666',
-    fontSize: 12,
-    textAlign: 'center',
-    marginTop: 16,
-    lineHeight: 18,
-  },
-});
+const createStyles = (theme: ReturnType<typeof useTheme>['theme']) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: theme.colors.background },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingTop: 56,
+      paddingBottom: 12,
+      backgroundColor: theme.colors.surface,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.colors.border,
+    },
+    backBtn: { width: 60 },
+    backText: { color: theme.colors.accent, fontSize: 14 },
+    headerTitle: { color: theme.colors.accent, fontSize: 18, fontWeight: '700' },
+    content: { padding: 16 },
+    balanceCard: {
+      backgroundColor: theme.colors.surface,
+      borderRadius: theme.radius.md,
+      padding: 20,
+      borderWidth: 1,
+      borderColor: theme.colors.borderStrong,
+      alignItems: 'center',
+      marginBottom: 24,
+      ...getShadowStyle(theme, 1),
+    },
+    balanceLabel: { color: theme.colors.textMuted, fontSize: 13, marginBottom: 4 },
+    balanceValue: { color: theme.colors.accent, fontSize: 28, fontWeight: '700' },
+    productCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      backgroundColor: theme.colors.surface,
+      borderRadius: theme.radius.md,
+      padding: 18,
+      marginBottom: 12,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      ...getShadowStyle(theme, theme.name === 'light' ? 0.6 : 1),
+    },
+    productCardActive: { borderColor: theme.colors.borderStrong },
+    productInfo: { flex: 1 },
+    productCredits: { color: theme.colors.text, fontSize: 18, fontWeight: '700' },
+    productPrice: { color: theme.colors.accent, fontSize: 15, marginTop: 4 },
+    buyText: {
+      color: theme.colors.accentText,
+      backgroundColor: theme.colors.accent,
+      paddingHorizontal: 20,
+      paddingVertical: 10,
+      borderRadius: theme.radius.sm,
+      fontWeight: '700',
+      fontSize: 14,
+      overflow: 'hidden',
+    },
+    note: {
+      color: theme.colors.textSoft,
+      fontSize: 12,
+      textAlign: 'center',
+      marginTop: 16,
+      lineHeight: 18,
+    },
+  });

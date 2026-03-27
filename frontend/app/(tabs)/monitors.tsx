@@ -22,9 +22,12 @@ import { CreateMonitorModal } from '../../components/CreateMonitorModal';
 import { EditMonitorModal } from '../../components/EditMonitorModal';
 import { TrashModal } from '../../components/TrashModal';
 import { useI18n } from '../../i18n';
+import { useTheme, getShadowStyle } from '../../theme';
 
 export default function MonitorsScreen() {
   const { t } = useI18n();
+  const { theme } = useTheme();
+  const styles = createStyles(theme);
   const router = useRouter();
   const { userToken, userInfo, isAuthenticated, handle401Error, refreshUserInfo } = useAuth();
   const {
@@ -115,7 +118,7 @@ export default function MonitorsScreen() {
   if (loading && monitors.length === 0) {
     return (
       <View style={styles.container}>
-        <ActivityIndicator size="large" color="#00FF00" />
+        <ActivityIndicator size="large" color={theme.colors.accent} />
       </View>
     );
   }
@@ -128,7 +131,7 @@ export default function MonitorsScreen() {
           style={styles.container}
           contentContainerStyle={styles.emptyContainer}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#00FF00" />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.colors.accent} />
           }
         >
           <Text style={styles.emptyText}>{t('monitors', 'noMonitorsYet')}</Text>
@@ -208,7 +211,7 @@ export default function MonitorsScreen() {
         style={styles.container}
         contentContainerStyle={styles.content}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#00FF00" />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.colors.accent} />
         }
       >
         <Text style={styles.title}>📊 {t('monitors', 'title').toUpperCase()}</Text>
@@ -327,114 +330,115 @@ export default function MonitorsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  wrapper: {
-    flex: 1,
-    backgroundColor: '#000000',
-  },
-  container: {
-    flex: 1,
-    backgroundColor: '#000000',
-  },
-  content: {
-    padding: 16,
-    paddingBottom: 100,
-  },
-  emptyContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 32,
-    paddingBottom: 100,
-  },
-  title: {
-    color: '#00FF00',
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 16,
-  },
-  emptyText: {
-    color: '#666666',
-    fontSize: 16,
-    marginBottom: 8,
-  },
-  emptySubtext: {
-    color: '#444444',
-    fontSize: 14,
-  },
-  errorText: {
-    color: '#FF4444',
-    fontSize: 16,
-    textAlign: 'center',
-    marginTop: 32,
-  },
-  fab: {
-    position: 'absolute',
-    right: 16,
-    bottom: 80,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#00FF00',
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 4,
-    borderWidth: 1,
-    borderColor: '#00CC00',
-  },
-  fabText: {
-    color: '#000000',
-    fontSize: 32,
-    fontWeight: '700',
-  },
-  trashButton: {
-    position: 'absolute',
-    right: 16,
-    bottom: 16,
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#333333',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#00FF00',
-  },
-  trashButtonText: {
-    fontSize: 24,
-  },
-  tabContainer: {
-    flexDirection: 'row',
-    marginBottom: 16,
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  tab: {
-    flex: 1,
-    minWidth: 80,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    backgroundColor: '#222222',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#333333',
-  },
-  tabActive: {
-    backgroundColor: '#00FF00',
-    borderColor: '#00FF00',
-  },
-  tabText: {
-    color: '#666666',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  tabTextActive: {
-    color: '#000000',
-    fontWeight: '700',
-  },
-  emptyState: {
-    padding: 32,
-    alignItems: 'center',
-  },
-});
+const createStyles = (theme: ReturnType<typeof useTheme>['theme']) =>
+  StyleSheet.create({
+    wrapper: {
+      flex: 1,
+      backgroundColor: theme.colors.background,
+    },
+    container: {
+      flex: 1,
+      backgroundColor: theme.colors.background,
+    },
+    content: {
+      padding: 16,
+      paddingBottom: 100,
+    },
+    emptyContainer: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 32,
+      paddingBottom: 100,
+    },
+    title: {
+      color: theme.colors.accent,
+      fontSize: 20,
+      fontWeight: '700',
+      marginBottom: 16,
+    },
+    emptyText: {
+      color: theme.colors.textSoft,
+      fontSize: 16,
+      marginBottom: 8,
+    },
+    emptySubtext: {
+      color: theme.colors.textMuted,
+      fontSize: 14,
+    },
+    errorText: {
+      color: theme.colors.danger,
+      fontSize: 16,
+      textAlign: 'center',
+      marginTop: 32,
+    },
+    fab: {
+      position: 'absolute',
+      right: 16,
+      bottom: 80,
+      width: 56,
+      height: 56,
+      borderRadius: 28,
+      backgroundColor: theme.colors.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: theme.colors.borderStrong,
+      ...getShadowStyle(theme, 1),
+    },
+    fabText: {
+      color: theme.colors.accentText,
+      fontSize: 32,
+      fontWeight: '700',
+    },
+    trashButton: {
+      position: 'absolute',
+      right: 16,
+      bottom: 16,
+      width: 48,
+      height: 48,
+      borderRadius: 24,
+      backgroundColor: theme.colors.surfaceMuted,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: theme.colors.borderStrong,
+    },
+    trashButtonText: {
+      fontSize: 24,
+    },
+    tabContainer: {
+      flexDirection: 'row',
+      marginBottom: 16,
+      gap: 8,
+      flexWrap: 'wrap',
+    },
+    tab: {
+      flex: 1,
+      minWidth: 80,
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      borderRadius: theme.radius.sm,
+      backgroundColor: theme.colors.surfaceMuted,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    tabActive: {
+      backgroundColor: theme.colors.accent,
+      borderColor: theme.colors.accent,
+    },
+    tabText: {
+      color: theme.colors.textSoft,
+      fontSize: 12,
+      fontWeight: '600',
+    },
+    tabTextActive: {
+      color: theme.colors.accentText,
+      fontWeight: '700',
+    },
+    emptyState: {
+      padding: 32,
+      alignItems: 'center',
+    },
+  });

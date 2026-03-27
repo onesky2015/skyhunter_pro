@@ -40,6 +40,7 @@ import {
 } from '../constants/utils';
 import { MonitorCreatePayload, SortStrategy, TripType } from '../types';
 import { useI18n } from '../i18n';
+import { useTheme, getShadowStyle } from '../theme';
 
 /** 预填数据（从 HeatmapGrid 点击传入） */
 export interface MonitorPrefillData {
@@ -78,6 +79,8 @@ export const CreateMonitorModal: React.FC<CreateMonitorModalProps> = ({
   prefillData = null,
 }) => {
   const { t } = useI18n();
+  const { theme } = useTheme();
+  const styles = createStyles(theme);
   const [origin, setOrigin] = useState('');
   const [destination, setDestination] = useState('');
   const [startDate, setStartDate] = useState(getDefaultStartDate());
@@ -560,6 +563,7 @@ export const CreateMonitorModal: React.FC<CreateMonitorModalProps> = ({
               onClose={() => setAlliancePickerVisible(false)}
               value={allianceInclude}
               onChange={setAllianceInclude}
+              isNested={true}
             />
 
             {/* Airline Picker Modal */}
@@ -568,6 +572,7 @@ export const CreateMonitorModal: React.FC<CreateMonitorModalProps> = ({
               onClose={() => setAirlinePickerVisible(false)}
               value={airlineInclude}
               onChange={setAirlineInclude}
+              isNested={true}
             />
 
             {/* Buttons */}
@@ -584,7 +589,7 @@ export const CreateMonitorModal: React.FC<CreateMonitorModalProps> = ({
                 disabled={submitting || insufficientCredits}
               >
                 {submitting ? (
-                  <ActivityIndicator color="#000" />
+                  <ActivityIndicator color={theme.colors.accentText} />
                 ) : (
                   <Text style={styles.submitButtonText}>
                     {insufficientCredits
@@ -601,369 +606,371 @@ export const CreateMonitorModal: React.FC<CreateMonitorModalProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-    justifyContent: 'flex-end',
-  },
-  scrollContent: {
-    padding: 16,
-  },
-  modal: {
-    backgroundColor: '#111111',
-    borderRadius: 16,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: '#00FF00',
-    overflow: 'visible' as const,
-    zIndex: 10,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  title: {
-    color: '#00FF00',
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  credits: {
-    color: '#00FF00',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  subtitle: {
-    color: '#999999',
-    fontSize: 12,
-    marginBottom: 20,
-  },
-  label: {
-    color: '#00FF00',
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 12,
-    marginBottom: 8,
-    textTransform: 'uppercase',
-  },
-  inputGroup: {
-    marginBottom: 12,
-  },
-  input: {
-    backgroundColor: '#222222',
-    color: '#FFFFFF',
-    padding: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#333333',
-    fontSize: 16,
-    marginBottom: 12,
-  },
-  row: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  halfInput: {
-    flex: 1,
-  },
-  selector: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 12,
-  },
-  selectorButton: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 8,
-    backgroundColor: '#222222',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#333333',
-  },
-  selectorButtonSmall: {
-    flex: 1,
-    padding: 8,
-  },
-  selectorButtonActive: {
-    backgroundColor: '#00FF00',
-    borderColor: '#00FF00',
-  },
-  selectorText: {
-    color: '#666666',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  selectorTextSmall: {
-    fontSize: 10,
-  },
-  selectorTextActive: {
-    color: '#000000',
-  },
-  // Phase 2: Stepper
-  stepperRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#222222',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#333333',
-    marginBottom: 12,
-  },
-  stepperBtn: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#333333',
-    borderRadius: 8,
-  },
-  stepperBtnText: {
-    color: '#00FF00',
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  stepperValue: {
-    flex: 1,
-    textAlign: 'center',
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  // Phase 2: Frequency & Duration
-  phase2Section: {
-    backgroundColor: '#0A0A0A',
-    padding: 16,
-    borderRadius: 12,
-    marginTop: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#00FF00',
-  },
-  sectionTitle: {
-    color: '#00FF00',
-    fontSize: 14,
-    fontWeight: '700',
-    marginBottom: 12,
-  },
-  frequencyGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  frequencyButton: {
-    width: '31%',
-    padding: 10,
-    borderRadius: 8,
-    backgroundColor: '#222222',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#333333',
-  },
-  frequencyButtonActive: {
-    backgroundColor: '#00FF00',
-    borderColor: '#00FF00',
-  },
-  frequencyEmoji: {
-    fontSize: 18,
-    marginBottom: 4,
-  },
-  frequencyLabel: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  frequencyLabelActive: {
-    color: '#000000',
-  },
-  frequencyDesc: {
-    color: '#666666',
-    fontSize: 9,
-    marginTop: 2,
-  },
-  frequencyDescActive: {
-    color: '#333333',
-  },
-  durationRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  durationButton: {
-    flex: 1,
-    padding: 10,
-    borderRadius: 8,
-    backgroundColor: '#222222',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#333333',
-  },
-  durationButtonActive: {
-    backgroundColor: '#00FF00',
-    borderColor: '#00FF00',
-  },
-  durationText: {
-    color: '#999999',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  durationTextActive: {
-    color: '#000000',
-  },
-  costBox: {
-    marginTop: 16,
-    padding: 12,
-    borderRadius: 8,
-    backgroundColor: '#1A1A2E',
-    borderWidth: 1,
-    borderColor: '#00FF00',
-    alignItems: 'center',
-  },
-  costBoxError: {
-    borderColor: '#FF4444',
-    backgroundColor: '#2E1A1A',
-  },
-  costLabel: {
-    color: '#999999',
-    fontSize: 11,
-    marginBottom: 4,
-  },
-  costValue: {
-    color: '#00FF00',
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  costValueError: {
-    color: '#FF4444',
-  },
-  costWarning: {
-    color: '#FF4444',
-    fontSize: 11,
-    marginTop: 4,
-    fontWeight: '600',
-  },
-  buttons: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 20,
-  },
-  cancelButton: {
-    flex: 1,
-    backgroundColor: '#333333',
-    padding: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  cancelButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  submitButton: {
-    flex: 2,
-    backgroundColor: '#00FF00',
-    padding: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  submitButtonDisabled: {
-    opacity: 0.4,
-  },
-  submitButtonText: {
-    color: '#000000',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  advancedSection: {
-    backgroundColor: '#222222',
-    padding: 16,
-    borderRadius: 8,
-    marginTop: 12,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#333333',
-  },
-  stopsSelector: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 12,
-  },
-  stopsButton: {
-    flex: 1,
-    padding: 10,
-    borderRadius: 6,
-    backgroundColor: '#333333',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#444444',
-  },
-  stopsButtonActive: {
-    backgroundColor: '#00FF00',
-    borderColor: '#00FF00',
-  },
-  stopsButtonText: {
-    color: '#999999',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  stopsButtonTextActive: {
-    color: '#000000',
-  },
-  airlineDropdown: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#333333',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#444444',
-    marginBottom: 12,
-  },
-  airlineDropdownActive: {
-    borderColor: '#00FF00',
-  },
-  airlineDropdownText: {
-    color: '#999999',
-    fontSize: 13,
-    flex: 1,
-  },
-  airlineDropdownTextActive: {
-    color: '#00FF00',
-  },
-  airlineDropdownArrow: {
-    color: '#666666',
-    fontSize: 12,
-    marginLeft: 8,
-  },
-  strategySelector: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 12,
-  },
-  strategyButton: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 8,
-    backgroundColor: '#333333',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#444444',
-  },
-  strategyButtonActive: {
-    backgroundColor: '#00FF00',
-    borderColor: '#00FF00',
-  },
-  strategyEmoji: {
-    fontSize: 20,
-    marginBottom: 4,
-  },
-  strategyButtonText: {
-    color: '#999999',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  strategyButtonTextActive: {
-    color: '#000000',
-  },
-});
+const createStyles = (theme: ReturnType<typeof useTheme>['theme']) =>
+  StyleSheet.create({
+    overlay: {
+      flex: 1,
+      backgroundColor: theme.colors.overlay,
+      justifyContent: 'flex-end',
+    },
+    scrollContent: {
+      padding: 16,
+    },
+    modal: {
+      backgroundColor: theme.colors.surface,
+      borderRadius: theme.radius.lg,
+      padding: 20,
+      borderWidth: 1,
+      borderColor: theme.colors.borderStrong,
+      overflow: 'visible' as const,
+      zIndex: 10,
+      ...getShadowStyle(theme, 1),
+    },
+    header: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 8,
+    },
+    title: {
+      color: theme.colors.accent,
+      fontSize: 20,
+      fontWeight: '700',
+    },
+    credits: {
+      color: theme.colors.accent,
+      fontSize: 16,
+      fontWeight: '600',
+    },
+    subtitle: {
+      color: theme.colors.textMuted,
+      fontSize: 12,
+      marginBottom: 20,
+    },
+    label: {
+      color: theme.colors.accent,
+      fontSize: 12,
+      fontWeight: '600',
+      marginTop: 12,
+      marginBottom: 8,
+      textTransform: 'uppercase',
+    },
+    inputGroup: {
+      marginBottom: 12,
+    },
+    input: {
+      backgroundColor: theme.colors.inputBg,
+      color: theme.colors.text,
+      padding: 12,
+      borderRadius: theme.radius.sm,
+      borderWidth: 1,
+      borderColor: theme.colors.inputBorder,
+      fontSize: 16,
+      marginBottom: 12,
+    },
+    row: {
+      flexDirection: 'row',
+      gap: 12,
+    },
+    halfInput: {
+      flex: 1,
+    },
+    selector: {
+      flexDirection: 'row',
+      gap: 8,
+      marginBottom: 12,
+    },
+    selectorButton: {
+      flex: 1,
+      padding: 12,
+      borderRadius: theme.radius.sm,
+      backgroundColor: theme.colors.surfaceMuted,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    selectorButtonSmall: {
+      flex: 1,
+      padding: 8,
+    },
+    selectorButtonActive: {
+      backgroundColor: theme.colors.accent,
+      borderColor: theme.colors.accent,
+    },
+    selectorText: {
+      color: theme.colors.textSoft,
+      fontSize: 12,
+      fontWeight: '600',
+    },
+    selectorTextSmall: {
+      fontSize: 10,
+    },
+    selectorTextActive: {
+      color: theme.colors.accentText,
+    },
+    stepperRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: theme.colors.inputBg,
+      borderRadius: theme.radius.sm,
+      borderWidth: 1,
+      borderColor: theme.colors.inputBorder,
+      marginBottom: 12,
+    },
+    stepperBtn: {
+      width: 44,
+      height: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.colors.surfaceMuted,
+      borderRadius: theme.radius.sm,
+    },
+    stepperBtnText: {
+      color: theme.colors.accent,
+      fontSize: 20,
+      fontWeight: '700',
+    },
+    stepperValue: {
+      flex: 1,
+      textAlign: 'center',
+      color: theme.colors.text,
+      fontSize: 18,
+      fontWeight: '700',
+    },
+    phase2Section: {
+      backgroundColor: theme.colors.backgroundAlt,
+      padding: 16,
+      borderRadius: theme.radius.md,
+      marginTop: 16,
+      marginBottom: 12,
+      borderWidth: 1,
+      borderColor: theme.colors.borderStrong,
+    },
+    sectionTitle: {
+      color: theme.colors.accent,
+      fontSize: 14,
+      fontWeight: '700',
+      marginBottom: 12,
+    },
+    frequencyGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+    },
+    frequencyButton: {
+      width: '31%',
+      padding: 10,
+      borderRadius: theme.radius.sm,
+      backgroundColor: theme.colors.surfaceMuted,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    frequencyButtonActive: {
+      backgroundColor: theme.colors.accent,
+      borderColor: theme.colors.accent,
+    },
+    frequencyEmoji: {
+      fontSize: 18,
+      marginBottom: 4,
+    },
+    frequencyLabel: {
+      color: theme.colors.text,
+      fontSize: 11,
+      fontWeight: '700',
+    },
+    frequencyLabelActive: {
+      color: theme.colors.accentText,
+    },
+    frequencyDesc: {
+      color: theme.colors.textSoft,
+      fontSize: 9,
+      marginTop: 2,
+    },
+    frequencyDescActive: {
+      color: theme.colors.accentText,
+    },
+    durationRow: {
+      flexDirection: 'row',
+      gap: 8,
+    },
+    durationButton: {
+      flex: 1,
+      padding: 10,
+      borderRadius: theme.radius.sm,
+      backgroundColor: theme.colors.surfaceMuted,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    durationButtonActive: {
+      backgroundColor: theme.colors.accent,
+      borderColor: theme.colors.accent,
+    },
+    durationText: {
+      color: theme.colors.textMuted,
+      fontSize: 11,
+      fontWeight: '600',
+    },
+    durationTextActive: {
+      color: theme.colors.accentText,
+    },
+    costBox: {
+      marginTop: 16,
+      padding: 12,
+      borderRadius: theme.radius.sm,
+      backgroundColor: theme.colors.surfaceAlt,
+      borderWidth: 1,
+      borderColor: theme.colors.borderStrong,
+      alignItems: 'center',
+    },
+    costBoxError: {
+      borderColor: theme.colors.danger,
+      backgroundColor: `${theme.colors.danger}22`,
+    },
+    costLabel: {
+      color: theme.colors.textMuted,
+      fontSize: 11,
+      marginBottom: 4,
+    },
+    costValue: {
+      color: theme.colors.accent,
+      fontSize: 20,
+      fontWeight: '700',
+    },
+    costValueError: {
+      color: theme.colors.danger,
+    },
+    costWarning: {
+      color: theme.colors.danger,
+      fontSize: 11,
+      marginTop: 4,
+      fontWeight: '600',
+    },
+    buttons: {
+      flexDirection: 'row',
+      gap: 12,
+      marginTop: 20,
+    },
+    cancelButton: {
+      flex: 1,
+      backgroundColor: theme.colors.surfaceMuted,
+      padding: 16,
+      borderRadius: theme.radius.sm,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    cancelButtonText: {
+      color: theme.colors.text,
+      fontSize: 16,
+      fontWeight: '700',
+    },
+    submitButton: {
+      flex: 2,
+      backgroundColor: theme.colors.accent,
+      padding: 16,
+      borderRadius: theme.radius.sm,
+      alignItems: 'center',
+    },
+    submitButtonDisabled: {
+      opacity: 0.4,
+    },
+    submitButtonText: {
+      color: theme.colors.accentText,
+      fontSize: 14,
+      fontWeight: '700',
+    },
+    advancedSection: {
+      backgroundColor: theme.colors.surfaceMuted,
+      padding: 16,
+      borderRadius: theme.radius.sm,
+      marginTop: 12,
+      marginBottom: 12,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    stopsSelector: {
+      flexDirection: 'row',
+      gap: 8,
+      marginBottom: 12,
+    },
+    stopsButton: {
+      flex: 1,
+      padding: 10,
+      borderRadius: 6,
+      backgroundColor: theme.colors.surfaceAlt,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    stopsButtonActive: {
+      backgroundColor: theme.colors.accent,
+      borderColor: theme.colors.accent,
+    },
+    stopsButtonText: {
+      color: theme.colors.textMuted,
+      fontSize: 11,
+      fontWeight: '600',
+    },
+    stopsButtonTextActive: {
+      color: theme.colors.accentText,
+    },
+    airlineDropdown: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      padding: 12,
+      backgroundColor: theme.colors.surfaceAlt,
+      borderRadius: theme.radius.sm,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      marginBottom: 12,
+    },
+    airlineDropdownActive: {
+      borderColor: theme.colors.borderStrong,
+    },
+    airlineDropdownText: {
+      color: theme.colors.textMuted,
+      fontSize: 13,
+      flex: 1,
+    },
+    airlineDropdownTextActive: {
+      color: theme.colors.accent,
+    },
+    airlineDropdownArrow: {
+      color: theme.colors.textSoft,
+      fontSize: 12,
+      marginLeft: 8,
+    },
+    strategySelector: {
+      flexDirection: 'row',
+      gap: 12,
+      marginBottom: 12,
+    },
+    strategyButton: {
+      flex: 1,
+      padding: 12,
+      borderRadius: theme.radius.sm,
+      backgroundColor: theme.colors.surfaceAlt,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    strategyButtonActive: {
+      backgroundColor: theme.colors.accent,
+      borderColor: theme.colors.accent,
+    },
+    strategyEmoji: {
+      fontSize: 20,
+      marginBottom: 4,
+    },
+    strategyButtonText: {
+      color: theme.colors.textMuted,
+      fontSize: 12,
+      fontWeight: '700',
+    },
+    strategyButtonTextActive: {
+      color: theme.colors.accentText,
+    },
+  });

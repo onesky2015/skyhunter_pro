@@ -12,11 +12,14 @@ import {
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuth } from '../../hooks/useAuth';
 import { useI18n } from '../../i18n';
+import { useTheme, getShadowStyle } from '../../theme';
 
 const RESEND_COOLDOWN_SECONDS = 60;
 
 export default function VerifyEmailScreen() {
   const { t } = useI18n();
+  const { theme } = useTheme();
+  const styles = createStyles(theme);
   const router = useRouter();
   const params = useLocalSearchParams<{ email: string }>();
   const { verifyEmail, resendVerification } = useAuth();
@@ -106,7 +109,7 @@ export default function VerifyEmailScreen() {
           disabled={loading}
         >
           {loading ? (
-            <ActivityIndicator color="#000" />
+            <ActivityIndicator color={theme.colors.accentText} />
           ) : (
             <Text style={styles.buttonText}>{t('auth', 'verify')}</Text>
           )}
@@ -134,97 +137,99 @@ export default function VerifyEmailScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000000',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 16,
-  },
-  card: {
-    width: '100%',
-    maxWidth: 400,
-    backgroundColor: '#111111',
-    borderRadius: 12,
-    padding: 24,
-    borderWidth: 1,
-    borderColor: '#00FF00',
-  },
-  title: {
-    color: '#00FF00',
-    fontSize: 24,
-    fontWeight: '700',
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  subtitle: {
-    color: '#a1a1aa',
-    fontSize: 14,
-    textAlign: 'center',
-    marginBottom: 4,
-  },
-  email: {
-    color: '#00FF00',
-    fontSize: 14,
-    fontWeight: '600',
-    textAlign: 'center',
-    marginBottom: 24,
-    fontFamily: 'monospace',
-  },
-  label: {
-    color: '#00FF00',
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 8,
-    textTransform: 'uppercase',
-  },
-  input: {
-    backgroundColor: '#222222',
-    color: '#FFFFFF',
-    padding: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#333333',
-    fontSize: 24,
-    marginBottom: 16,
-    textAlign: 'center',
-    letterSpacing: 8,
-    fontFamily: 'monospace',
-  },
-  button: {
-    backgroundColor: '#00FF00',
-    padding: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  buttonDisabled: {
-    opacity: 0.5,
-  },
-  buttonText: {
-    color: '#000000',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  resendButton: {
-    marginTop: 20,
-    alignItems: 'center',
-  },
-  resendText: {
-    color: '#00FF00',
-    fontSize: 14,
-  },
-  resendDisabled: {
-    color: '#555555',
-  },
-  footer: {
-    marginTop: 24,
-    alignItems: 'center',
-  },
-  linkText: {
-    color: '#00FF00',
-    fontSize: 14,
-    textDecorationLine: 'underline',
-  },
-});
+const createStyles = (theme: ReturnType<typeof useTheme>['theme']) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: theme.colors.background,
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 16,
+    },
+    card: {
+      width: '100%',
+      maxWidth: 400,
+      backgroundColor: theme.colors.surface,
+      borderRadius: theme.radius.md,
+      padding: 24,
+      borderWidth: 1,
+      borderColor: theme.colors.borderStrong,
+      ...getShadowStyle(theme, theme.name === 'light' ? 0.7 : 1),
+    },
+    title: {
+      color: theme.colors.accent,
+      fontSize: 24,
+      fontWeight: '700',
+      textAlign: 'center',
+      marginBottom: 16,
+    },
+    subtitle: {
+      color: theme.colors.textMuted,
+      fontSize: 14,
+      textAlign: 'center',
+      marginBottom: 4,
+    },
+    email: {
+      color: theme.colors.accent,
+      fontSize: 14,
+      fontWeight: '600',
+      textAlign: 'center',
+      marginBottom: 24,
+      fontFamily: 'monospace',
+    },
+    label: {
+      color: theme.colors.accent,
+      fontSize: 12,
+      fontWeight: '600',
+      marginBottom: 8,
+      textTransform: 'uppercase',
+    },
+    input: {
+      backgroundColor: theme.colors.inputBg,
+      color: theme.colors.text,
+      padding: 12,
+      borderRadius: theme.radius.sm,
+      borderWidth: 1,
+      borderColor: theme.colors.inputBorder,
+      fontSize: 24,
+      marginBottom: 16,
+      textAlign: 'center',
+      letterSpacing: 8,
+      fontFamily: 'monospace',
+    },
+    button: {
+      backgroundColor: theme.colors.accent,
+      padding: 16,
+      borderRadius: theme.radius.sm,
+      alignItems: 'center',
+      marginTop: 8,
+    },
+    buttonDisabled: {
+      opacity: 0.5,
+    },
+    buttonText: {
+      color: theme.colors.accentText,
+      fontSize: 16,
+      fontWeight: '700',
+    },
+    resendButton: {
+      marginTop: 20,
+      alignItems: 'center',
+    },
+    resendText: {
+      color: theme.colors.accent,
+      fontSize: 14,
+    },
+    resendDisabled: {
+      color: theme.colors.textSoft,
+    },
+    footer: {
+      marginTop: 24,
+      alignItems: 'center',
+    },
+    linkText: {
+      color: theme.colors.accent,
+      fontSize: 14,
+      textDecorationLine: 'underline',
+    },
+  });

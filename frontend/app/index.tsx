@@ -4,11 +4,14 @@ import { useRouter } from 'expo-router';
 import { View, ActivityIndicator, StyleSheet, Text } from 'react-native';
 import { useAuth } from '../hooks/useAuth';
 import { useI18n } from '../i18n';
+import { useTheme, getShadowStyle } from '../theme';
 
 export default function Index() {
   const { t } = useI18n();
   const { isAuthenticated, loading } = useAuth();
   const router = useRouter();
+  const { theme } = useTheme();
+  const styles = createStyles(theme);
 
   useEffect(() => {
     if (loading) return;
@@ -17,7 +20,7 @@ export default function Index() {
     const performNavigation = () => {
       try {
         if (isAuthenticated) {
-          router.replace('/(tabs)/search');
+          router.replace('/(tabs)');
         } else {
           router.replace('/auth/login');
         }
@@ -36,29 +39,32 @@ export default function Index() {
   return (
     <View style={styles.container}>
       <Text style={styles.logo}>SKYHUNTER</Text>
-      <ActivityIndicator size="large" color="#00FF00" style={{ marginTop: 20 }} />
+      <ActivityIndicator size="large" color={theme.colors.accent} style={{ marginTop: 20 }} />
       <Text style={styles.loadingText}>{t('index', 'initializing')}</Text>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000000',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  logo: {
-    color: '#00FF00',
-    fontSize: 32,
-    fontWeight: '700',
-    letterSpacing: 4,
-  },
-  loadingText: {
-    color: '#666666',
-    fontSize: 12,
-    marginTop: 12,
-    letterSpacing: 2,
-  },
-});
+const createStyles = (theme: ReturnType<typeof useTheme>['theme']) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: theme.colors.background,
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 24,
+    },
+    logo: {
+      color: theme.colors.accent,
+      fontSize: 32,
+      fontWeight: '700',
+      letterSpacing: 4,
+      ...getShadowStyle(theme, theme.name === 'glass' ? 1.2 : 1),
+    },
+    loadingText: {
+      color: theme.colors.textSoft,
+      fontSize: 12,
+      marginTop: 12,
+      letterSpacing: 2,
+    },
+  });

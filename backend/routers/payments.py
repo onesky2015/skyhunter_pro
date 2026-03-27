@@ -88,11 +88,36 @@ async def verify_apple_iap(
         logger.warning(f"Apple IAP verification failed: status={data.get('status')}")
         raise HTTPException(status_code=400, detail=f"Receipt verification failed (status: {data.get('status')})")
 
+    # 查找该 product_id 对应的最新一笔交易
+    in_app_list = data.get("receipt", {}).get("in_app", [])
+    product_txns = [t for t in in_app_list if t.get("product_id") == request.product_id]
+    if not product_txns:
+        raise HTTPException(status_code=400, detail="Product not found in receipt")
+    
+    # 按照购买时间倒序，取最新的一条
+    product_txns.sort(key=lambda x: int(x.get("purchase_date_ms", 0)), reverse=True)
+    latest_txn = product_txns[0]
+    transaction_id = latest_txn.get("transaction_id")
+    if not transaction_id:
+        raise HTTPException(status_code=400, detail="Transaction ID missing in receipt")
+
     credits_to_add = product["credits"]
     with Session(engine) as session:
+        # 防重复检查
+        existing_txn = session.exec(
+            select(TransactionHistory)
+            .where(TransactionHistory.reference_type == "apple_iap")
+            .where(TransactionHistory.reference_id == transaction_id)
+        ).first()
+
         user = session.get(User, current_user.id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
+
+        if existing_txn:
+            logger.info(f"Apple IAP: Duplicate receipt for transaction {transaction_id}, ignored.")
+            return {"credits_added": 0, "credits_total": user.credits, "message": "Receipt already processed"}
+
         credits_before = user.credits
         user.credits += credits_to_add
         session.add(user)
@@ -106,13 +131,16 @@ async def verify_apple_iap(
             credits_after=user.credits,
             description=f"Apple IAP: {request.product_id}",
             reference_type="apple_iap",
-            reference_id=request.product_id,
+            reference_id=transaction_id,
         )
-    logger.info(f"💰 Apple IAP: User #{current_user.id} +{credits_to_add} credits ({request.product_id})")
+    logger.info(f"💰 Apple IAP: User #{current_user.id} +{credits_to_add} credits ({request.product_id}, txn: {transaction_id})")
     return {"credits_added": credits_to_add, "credits_total": user.credits}
 
 
 # ========== Google Play Billing 验证 ==========
+
+GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+GOOGLE_PACKAGE_NAME = os.getenv("GOOGLE_PACKAGE_NAME", "com.skyhunter.app")
 
 class GooglePlayVerifyRequest(BaseModel):
     purchase_token: str = Field(..., description="Google Play 购买 token")
@@ -132,16 +160,53 @@ async def verify_google_play(
     if not product:
         raise HTTPException(status_code=400, detail=f"Unknown product: {request.product_id}")
 
-    # TODO: 接入 Google Play Developer API 验证
-    # 需要 google-auth + service account credentials
-    # 当前为信任模式，生产环境必须启用验证
-    logger.warning(f"Google Play verification: trust mode (product={request.product_id})")
+    if not GOOGLE_APPLICATION_CREDENTIALS or not os.path.exists(GOOGLE_APPLICATION_CREDENTIALS):
+        # 降级处理或者报错：如果是生产必须报错
+        logger.error("GOOGLE_APPLICATION_CREDENTIALS is not configured or file missing.")
+        raise HTTPException(status_code=503, detail="Google Play verification is not configured on the server")
+
+    try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+
+        credentials = service_account.Credentials.from_service_account_file(
+            GOOGLE_APPLICATION_CREDENTIALS,
+            scopes=["https://www.googleapis.com/auth/androidpublisher"]
+        )
+        service = build("androidpublisher", "v3", credentials=credentials)
+        result = service.purchases().products().get(
+            packageName=GOOGLE_PACKAGE_NAME,
+            productId=request.product_id,
+            token=request.purchase_token
+        ).execute()
+
+        purchase_state = result.get("purchaseState")
+        if purchase_state != 0: # 0 = PURCHASED, 1 = CANCELED, 2 = PENDING
+            raise HTTPException(status_code=400, detail=f"Purchase state is {purchase_state} (not 0=PURCHASED)")
+
+        order_id = result.get("orderId", request.purchase_token)
+
+    except Exception as e:
+        logger.error(f"Google Play verification failed: {e}")
+        raise HTTPException(status_code=400, detail="Receipt verification failed with Google Developer API")
 
     credits_to_add = product["credits"]
     with Session(engine) as session:
+        # 防重复发货
+        existing_txn = session.exec(
+            select(TransactionHistory)
+            .where(TransactionHistory.reference_type == "google_play")
+            .where(TransactionHistory.reference_id == order_id)
+        ).first()
+
         user = session.get(User, current_user.id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
+
+        if existing_txn:
+            logger.info(f"Google Play: Duplicate receipt for order {order_id}, ignored.")
+            return {"credits_added": 0, "credits_total": user.credits, "message": "Receipt already processed"}
+
         credits_before = user.credits
         user.credits += credits_to_add
         session.add(user)
@@ -155,7 +220,7 @@ async def verify_google_play(
             credits_after=user.credits,
             description=f"Google Play: {request.product_id}",
             reference_type="google_play",
-            reference_id=request.product_id,
+            reference_id=order_id,
         )
     logger.info(f"💰 Google Play: User #{current_user.id} +{credits_to_add} credits ({request.product_id})")
     return {"credits_added": credits_to_add, "credits_total": user.credits}
@@ -257,6 +322,9 @@ async def stripe_webhook(request: Request):
 
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
+        event_id = event.get("id", "")
+        checkout_session_id = session.get("id", "")
+        
         user_id = int(session.get("metadata", {}).get("user_id", "0"))
         product_id = session.get("metadata", {}).get("product_id", "")
         credits_str = session.get("metadata", {}).get("credits", "0")
@@ -264,6 +332,17 @@ async def stripe_webhook(request: Request):
 
         if user_id and credits_to_add > 0:
             with Session(engine) as db_session:
+                # 幂等性检查：判断该 Stripe 事件或者 session_id 是否已处理
+                existing_txn = db_session.exec(
+                    select(TransactionHistory)
+                    .where(TransactionHistory.reference_type == "stripe")
+                    .where(TransactionHistory.reference_id == checkout_session_id)
+                ).first()
+
+                if existing_txn:
+                    logger.info(f"Stripe Webhook: Duplicate event for session {checkout_session_id}, ignored.")
+                    return {"status": "ok", "message": "Already processed"}
+
                 user = db_session.get(User, user_id)
                 if user:
                     credits_before = user.credits
@@ -279,7 +358,7 @@ async def stripe_webhook(request: Request):
                         credits_after=user.credits,
                         description=f"Stripe: {product_id}",
                         reference_type="stripe",
-                        reference_id=session.get("id", ""),
+                        reference_id=checkout_session_id,
                     )
                     logger.info(f"💰 Stripe: User #{user_id} +{credits_to_add} credits ({product_id})")
 

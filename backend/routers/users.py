@@ -35,7 +35,6 @@ from config import (
     _email_verify_attempts,
     _email_verify_resend_attempts,
 )
-from datetime import datetime, timedelta
 
 router = APIRouter()
 # ============================================================================
@@ -742,7 +741,7 @@ async def unregister_push_token(request: RegisterPushTokenRequest, current_user:
 
 class TopupRequest(BaseModel):
     """充值请求"""
-    amount: int = Field(default=50, ge=1, le=9999, description="充值积分数量")
+    amount: int = Field(default=50, ge=1, le=5000, description="充值积分数量（单次上限 5000）")
 
 
 class TopupResponse(BaseModel):

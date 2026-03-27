@@ -3,6 +3,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { HeatmapCell } from '../types';
 import { getLevelColor, getLevelOpacity, getDayFromDate } from '../constants/utils';
+import { useTheme } from '../theme';
 
 interface HeatmapGridProps {
   cells: HeatmapCell[];
@@ -14,6 +15,8 @@ interface HeatmapGridProps {
 
 export const HeatmapGrid: React.FC<HeatmapGridProps> = ({ cells, label, onCellPress, onCreateMonitor }) => {
   const isWeb = Platform.OS === 'web';
+  const { theme } = useTheme();
+  const styles = createStyles(theme);
 
   const formatCellDate = (dateStr: string): string => {
     // Web 端显示 MM-DD 格式
@@ -80,70 +83,71 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({ cells, label, onCellPr
   );
 };
 
-const styles = StyleSheet.create({
-  placeholder: {
-    padding: 20,
-    alignItems: 'center',
-  },
-  placeholderText: {
-    color: '#666666',
-    fontSize: 14,
-  },
-  label: {
-    color: '#00FF00',
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 8,
-    textTransform: 'uppercase',
-  },
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 4,
-  },
-  gridWeb: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  cell: {
-    width: 28,
-    height: 28,
-    borderRadius: 4,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#333333',
-  },
-  cellWeb: {
-    width: 60,
-    height: 60,
-    borderRadius: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#333333',
-  },
-  cellDay: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '600',
-  },
-  cellPrice: {
-    color: '#FFFFFF',
-    fontSize: 8,
-    marginTop: 2,
-  },
-  cellDateWeb: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  cellPriceWeb: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-});
+const createStyles = (theme: ReturnType<typeof useTheme>['theme']) =>
+  StyleSheet.create({
+    placeholder: {
+      padding: 20,
+      alignItems: 'center',
+    },
+    placeholderText: {
+      color: theme.colors.textSoft,
+      fontSize: 14,
+    },
+    label: {
+      color: theme.colors.accent,
+      fontSize: 12,
+      fontWeight: '600',
+      marginBottom: 8,
+      textTransform: 'uppercase',
+    },
+    grid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 4,
+    },
+    gridWeb: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+    },
+    cell: {
+      width: 28,
+      height: 28,
+      borderRadius: theme.radius.sm / 2,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    cellWeb: {
+      width: 60,
+      height: 60,
+      borderRadius: theme.radius.sm,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    cellDay: {
+      color: theme.colors.text,
+      fontSize: 10,
+      fontWeight: '600',
+    },
+    cellPrice: {
+      color: theme.colors.text,
+      fontSize: 8,
+      marginTop: 2,
+    },
+    cellDateWeb: {
+      color: theme.colors.text,
+      fontSize: 10,
+      fontWeight: '600',
+      marginBottom: 4,
+    },
+    cellPriceWeb: {
+      color: theme.colors.text,
+      fontSize: 12,
+      fontWeight: '700',
+    },
+  });
 

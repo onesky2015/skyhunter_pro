@@ -1,6 +1,7 @@
 // filename: components/DatePicker.tsx
 import React, { useState, useRef, useEffect, useId } from 'react';
 import { View, Text, TouchableOpacity, TextInput, StyleSheet, Platform } from 'react-native';
+import { useTheme } from '../theme';
 
 // 条件导入 DateTimePicker（Web 平台不支持）
 let DateTimePicker: any = null;
@@ -30,6 +31,8 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   style,
   minDate,
 }) => {
+  const { theme } = useTheme();
+  const styles = createStyles(theme);
   const [showPicker, setShowPicker] = useState(false);
   const webContainerRef = useRef<HTMLElement | View | null>(null);
   const webContainerId = useId().replace(/:/g, '-');
@@ -77,9 +80,9 @@ export const DatePicker: React.FC<DatePickerProps> = ({
         input.min = minDateStr;
         input.style.cssText = [
           'width:100%;min-height:44px;padding:12px;',
-          'background:#222;color:#fff;border-radius:8px;border:1px solid #333;',
+          `background:${theme.colors.inputBg};color:${theme.colors.text};border-radius:${theme.radius.sm}px;border:1px solid ${theme.colors.inputBorder};`,
           'font-size:16px;font-weight:600;cursor:pointer;box-sizing:border-box;',
-          'color-scheme:dark;',
+          `color-scheme:${theme.isDark ? 'dark' : 'light'};`,
         ].join('');
 
         const handleChange = (e: Event) => {
@@ -97,7 +100,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
           container.removeChild(input);
         }
       };
-    }, [minDateStr, onChange, webContainerId]);
+    }, [minDateStr, onChange, theme, webContainerId]);
 
     useEffect(() => {
       let container: HTMLElement | null =
@@ -184,68 +187,69 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  label: {
-    color: '#00FF00',
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 8,
-    textTransform: 'uppercase',
-  },
-  input: {
-    backgroundColor: '#222222',
-    padding: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#333333',
-  },
-  inputText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  placeholder: {
-    color: '#666666',
-  },
-  iosButtons: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    padding: 8,
-    backgroundColor: '#111111',
-  },
-  iosButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  iosButtonText: {
-    color: '#00FF00',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  webInput: {
-    flex: 1,
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  webDateContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  webDateButton: {
-    padding: 12,
-    backgroundColor: '#333333',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#444444',
-    alignItems: 'center',
-    justifyContent: 'center',
-    minWidth: 44,
-  },
-  webDateButtonText: {
-    color: '#00FF00',
-    fontSize: 18,
-  },
-});
+const createStyles = (theme: ReturnType<typeof useTheme>['theme']) =>
+  StyleSheet.create({
+    label: {
+      color: theme.colors.accent,
+      fontSize: 12,
+      fontWeight: '600',
+      marginBottom: 8,
+      textTransform: 'uppercase',
+    },
+    input: {
+      backgroundColor: theme.colors.inputBg,
+      padding: 12,
+      borderRadius: theme.radius.sm,
+      borderWidth: 1,
+      borderColor: theme.colors.inputBorder,
+    },
+    inputText: {
+      color: theme.colors.text,
+      fontSize: 16,
+      fontWeight: '600',
+    },
+    placeholder: {
+      color: theme.colors.textSoft,
+    },
+    iosButtons: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      padding: 8,
+      backgroundColor: theme.colors.surface,
+    },
+    iosButton: {
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+    },
+    iosButtonText: {
+      color: theme.colors.accent,
+      fontSize: 16,
+      fontWeight: '600',
+    },
+    webInput: {
+      flex: 1,
+      color: theme.colors.text,
+      fontSize: 16,
+      fontWeight: '600',
+    },
+    webDateContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    webDateButton: {
+      padding: 12,
+      backgroundColor: theme.colors.surfaceMuted,
+      borderRadius: theme.radius.sm,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+      minWidth: 44,
+    },
+    webDateButtonText: {
+      color: theme.colors.accent,
+      fontSize: 18,
+    },
+  });
 
