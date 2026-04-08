@@ -472,3 +472,17 @@ class OAuthAppleRequest(BaseModel):
 class OAuthGoogleRequest(BaseModel):
     """Google Sign-In 请求"""
     id_token: str = Field(..., description="Google 返回的 ID token (JWT)")
+
+class AdminConfigRequest(BaseModel):
+    """保存配置请求"""
+    key: str = Field(..., description="配置键")
+    value: str = Field(..., description="配置值 (JSON 或字符串)")
+    description: Optional[str] = Field(default=None)
+
+class AdminConfigResponse(BaseModel):
+    """配置响应"""
+    id: int
+    key: str
+    value: str
+    description: Optional[str] = None
+    updated_at: str

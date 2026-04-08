@@ -30,6 +30,17 @@ CREDIT_PRODUCTS = {
     "credits_1500": {"credits": 1500, "price_usd": 9.99},
 }
 
+def get_credit_products():
+    from models.database import SystemConfig
+    import json
+    with Session(engine) as session:
+        config = session.exec(select(SystemConfig).where(SystemConfig.key == "credit_pricing_packages")).first()
+        if config and config.value:
+            try:
+                return json.loads(config.value)
+            except Exception as e:
+                logger.error(f"Failed to parse credit_pricing_packages JSON: {e}")
+    return CREDIT_PRODUCTS
 
 class ProductListItem(BaseModel):
     product_id: str
@@ -40,9 +51,10 @@ class ProductListItem(BaseModel):
 @router.get("/api/v1/payments/products", tags=["payments"])
 async def list_products():
     """获取可购买的积分商品列表"""
+    products = get_credit_products()
     return [
         ProductListItem(product_id=pid, **info)
-        for pid, info in CREDIT_PRODUCTS.items()
+        for pid, info in products.items()
     ]
 
 
@@ -266,30 +278,42 @@ async def create_stripe_checkout(
     if not STRIPE_SECRET_KEY:
         raise HTTPException(status_code=503, detail="Stripe not configured")
 
-    product = CREDIT_PRODUCTS.get(request.product_id)
+    products = get_credit_products()
+    product = products.get(request.product_id)
     if not product:
         raise HTTPException(status_code=400, detail=f"Unknown product: {request.product_id}")
 
-    stripe_price_id = STRIPE_PRICE_MAP.get(request.product_id, "")
+    # 尝试从系统配置获取 stripe_price_id，否则回退到环境变量
+    stripe_price_id = product.get("stripe_price_id") or STRIPE_PRICE_MAP.get(request.product_id, "")
     if not stripe_price_id:
         raise HTTPException(status_code=400, detail=f"Stripe price not configured for: {request.product_id}")
 
     import stripe
     stripe.api_key = STRIPE_SECRET_KEY
 
-    session = stripe.checkout.Session.create(
-        payment_method_types=["card"],
-        line_items=[{"price": stripe_price_id, "quantity": 1}],
-        mode="payment",
-        success_url=STRIPE_SUCCESS_URL + "?session_id={CHECKOUT_SESSION_ID}",
-        cancel_url=STRIPE_CANCEL_URL,
-        client_reference_id=str(current_user.id),
-        metadata={
-            "user_id": str(current_user.id),
-            "product_id": request.product_id,
-            "credits": str(product["credits"]),
-        },
-    )
+    # 支持各种支付组合选项
+    payment_method_types = ["card", "alipay", "wechat_pay"]
+
+    try:
+        session = stripe.checkout.Session.create(
+            payment_method_types=payment_method_types,
+            payment_method_options={
+                "wechat_pay": {"client": "web"}
+            },
+            line_items=[{"price": stripe_price_id, "quantity": 1}],
+            mode="payment",
+            success_url=STRIPE_SUCCESS_URL + "?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url=STRIPE_CANCEL_URL,
+            client_reference_id=str(current_user.id),
+            metadata={
+                "user_id": str(current_user.id),
+                "product_id": request.product_id,
+                "credits": str(product["credits"]),
+            },
+        )
+    except Exception as e:
+        logger.error(f"Failed to create Stripe Checkout Session: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create checkout session")
 
     return StripeCheckoutResponse(
         checkout_url=session.url,

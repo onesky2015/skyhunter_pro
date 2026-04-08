@@ -283,3 +283,15 @@ class AdminAuditLog(SQLModel, table=True):
     details: Optional[str] = SQLField(default=None, description="操作详情 JSON")
     ip_address: Optional[str] = SQLField(default=None, description="操作者 IP")
     created_at: str = SQLField(default_factory=utc_iso_now, index=True, description="操作时间 ISO")
+
+class SystemConfig(SQLModel, table=True):
+    """系统全局配置表，例如积分成本、购买套餐等"""
+    __tablename__ = "system_config"
+    __table_args__ = {"extend_existing": True}
+
+    id: Optional[int] = SQLField(default=None, primary_key=True)
+    key: str = SQLField(index=True, unique=True, description="配置键名")
+    value: str = SQLField(description="配置值 (JSON 字符串或普通字符串)")
+    description: Optional[str] = SQLField(default=None, description="配置说明")
+    updated_at: str = SQLField(default_factory=utc_iso_now, description="更新时间 ISO")
+

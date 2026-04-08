@@ -608,6 +608,29 @@ export const adminApi = {
     return response.json();
   },
 
+  /** 获取系统配置 */
+  getConfigs: async (token: string | null, on401?: () => void): Promise<any[]> => {
+    const response = await apiRequest('/api/v1/admin/configs', {}, token, on401);
+    if (!response.ok) {
+      const err = await response.json().catch(() => null);
+      throw new Error(err?.detail || `HTTP ${response.status}`);
+    }
+    return response.json();
+  },
+
+  /** 更新系统配置 */
+  setConfig: async (token: string | null, key: string, value: string, description?: string, on401?: () => void): Promise<any> => {
+    const response = await apiRequest('/api/v1/admin/configs', {
+      method: 'PUT',
+      body: JSON.stringify({ key, value, description }),
+    }, token, on401);
+    if (!response.ok) {
+      const err = await response.json().catch(() => null);
+      throw new Error(err?.detail || `HTTP ${response.status}`);
+    }
+    return response.json();
+  },
+
   /** 获取用户列表 */
   getUsers: async (token: string | null, on401?: () => void): Promise<AdminUser[]> => {
     const response = await apiRequest('/api/v1/admin/users', {}, token, on401);

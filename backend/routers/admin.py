@@ -8,7 +8,7 @@ import io
 import os
 import shutil
 from db import engine
-from models.database import User, MonitorTask, PriceHistory, PasswordReset, TransactionHistory, Airport
+from models.database import User, MonitorTask, PriceHistory, PasswordReset, TransactionHistory, Airport, SystemConfig, utc_iso_now
 from schemas.api_models import *
 from api.deps import get_current_admin
 from config import logger
@@ -524,4 +524,32 @@ async def admin_upload_airports_csv(
         backup_path=backup_filename if backup_path else None,
     )
 
+# ============================================================================
+# API 端点：系统配置管理（Admin Only）
+# ============================================================================
+
+@router.get("/api/v1/admin/configs", response_model=List[AdminConfigResponse], summary="获取所有系统配置", tags=["admin-config"])
+async def admin_get_configs(admin_user: User = Depends(get_current_admin)):
+    """获取所有的全局系统配置。"""
+    with Session(engine) as session:
+        configs = session.exec(select(SystemConfig)).all()
+        return [AdminConfigResponse(**c.model_dump()) for c in configs]
+
+@router.put("/api/v1/admin/configs", response_model=AdminConfigResponse, summary="设置或更新系统配置", tags=["admin-config"])
+async def admin_set_config(request: AdminConfigRequest, admin_user: User = Depends(get_current_admin)):
+    """设置或更新指定的系统配置（如积分成本、积分套餐）。"""
+    with Session(engine) as session:
+        config = session.exec(select(SystemConfig).where(SystemConfig.key == request.key)).first()
+        if not config:
+            config = SystemConfig(key=request.key, value=request.value, description=request.description)
+            session.add(config)
+        else:
+            config.value = request.value
+            if request.description is not None:
+                config.description = request.description
+            config.updated_at = utc_iso_now()
+        session.commit()
+        session.refresh(config)
+        logger.info(f"⚙️ Admin #{admin_user.id} updated config key: {config.key}")
+        return AdminConfigResponse(**config.model_dump())
 

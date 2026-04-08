@@ -5,7 +5,7 @@ from typing import List, Optional
 from uuid import uuid4
 import math
 from db import engine
-from models.database import User, MonitorTask, TransactionHistory, FlightCache, PriceHistory, MonitorActivityLog, Airport, utc_iso_now
+from models.database import User, MonitorTask, TransactionHistory, FlightCache, PriceHistory, MonitorActivityLog, Airport, SystemConfig, utc_iso_now
 from schemas.api_models import *
 from api.deps import get_current_user
 from config import logger, USE_MOCK_DATA
@@ -112,9 +112,15 @@ async def search_flights(request: SearchRequest, current_user: User = Depends(ge
         if return_date_obj <= start_date_obj:
             raise HTTPException(status_code=400, detail="返程日期必须晚于出发日期")
 
-    # ── 积分检查 & 扣除：分级定价（单日 1 积分，多日 5 积分） ──
-    search_cost = 1 if request.days == 1 else 5
+    # ── 积分检查 & 扣除：分级定价（单日 1 积分，多日 5 积分，可由 SystemConfig 覆盖） ──
     with Session(engine) as session:
+        if request.days == 1:
+            cfg = session.exec(select(SystemConfig).where(SystemConfig.key == "search_cost_single_day")).first()
+            search_cost = int(cfg.value) if (cfg and cfg.value.isdigit()) else 1
+        else:
+            cfg = session.exec(select(SystemConfig).where(SystemConfig.key == "search_cost_multi_day")).first()
+            search_cost = int(cfg.value) if (cfg and cfg.value.isdigit()) else 5
+
         user = session.get(User, current_user.id)
         if not user or user.credits < search_cost:
             raise HTTPException(
@@ -235,13 +241,19 @@ async def quote_search(request: QuoteSearchRequest, current_user: User = Depends
     查询一次搜索操作的积分费用（不实际扣费）。
 
     分级定价逻辑：
-    - days == 1：单日搜索，cost = 1 积分
-    - days > 1 ：多日热力图（情报分析服务），cost = 5 积分
+    - days == 1：单日搜索，cost = 1 积分（受 SystemConfig 控制）
+    - days > 1 ：多日热力图（情报分析服务），cost = 5 积分（受 SystemConfig 控制）
 
     前端应在执行搜索前调用此接口，并在 UI 弹窗中展示真实费用让用户确认。
     """
-    cost = 1 if request.days == 1 else 5  # 分级定价：单日 1 积分，多日情报分析 5 积分
     with Session(engine) as session:
+        if request.days == 1:
+            cfg = session.exec(select(SystemConfig).where(SystemConfig.key == "search_cost_single_day")).first()
+            cost = int(cfg.value) if (cfg and cfg.value.isdigit()) else 1
+        else:
+            cfg = session.exec(select(SystemConfig).where(SystemConfig.key == "search_cost_multi_day")).first()
+            cost = int(cfg.value) if (cfg and cfg.value.isdigit()) else 5
+
         user = session.get(User, current_user.id)
         user_credits = user.credits if user else 0
     return QuoteSearchResponse(
@@ -346,12 +358,17 @@ async def create_monitor(request: MonitorCreateRequest, current_user: User = Dep
         if return_date_obj <= start_date_obj:
             raise HTTPException(status_code=400, detail="返程日期必须晚于出发日期")
 
-    # Phase 2: 动态计费 — ceil((duration_days * 24 * 60 / interval_minutes) * 0.1)
-    total_minutes = request.duration_days * 24 * 60
-    estimated_cost = max(1, math.ceil((total_minutes / request.interval_minutes) * 0.1))
-
     # 积分检查：余额不足时返回 402
     with Session(engine) as session:
+        cost_cfg = session.exec(select(SystemConfig).where(SystemConfig.key == "monitor_cost_per_check")).first()
+        try:
+            cost_per_check = float(cost_cfg.value) if cost_cfg and cost_cfg.value else 0.1
+        except ValueError:
+            cost_per_check = 0.1
+
+        total_minutes = request.duration_days * 24 * 60
+        estimated_cost = max(1, math.ceil((total_minutes / request.interval_minutes) * cost_per_check))
+
         user = session.get(User, current_user.id)
         if not user or user.credits < estimated_cost:
             raise HTTPException(
@@ -623,6 +640,11 @@ async def update_monitor(monitor_id: int, request: MonitorUpdateRequest, current
 
         dates_changed = False
 
+        cost_cfg = session.exec(select(SystemConfig).where(SystemConfig.key == "monitor_cost_per_check")).first()
+        try:
+            cost_per_check = float(cost_cfg.value) if cost_cfg and cost_cfg.value else 0.1
+        except ValueError:
+            cost_per_check = 0.1
         # 更新 target_price（传入即更新）
         if request.target_price is not None:
             task.target_price = request.target_price
@@ -681,8 +703,8 @@ async def update_monitor(monitor_id: int, request: MonitorUpdateRequest, current
                     if end_date_obj:
                         remaining_days = max(0, (end_date_obj - date.today()).days)
                         remaining_min = remaining_days * 24 * 60
-                        old_cost = max(0, math.ceil((remaining_min / old_interval) * 0.1))
-                        new_cost = max(0, math.ceil((remaining_min / new_interval) * 0.1))
+                        old_cost = max(0, math.ceil((remaining_min / old_interval) * cost_per_check))
+                        new_cost = max(0, math.ceil((remaining_min / new_interval) * cost_per_check))
                         cost_diff = max(0, new_cost - old_cost)
                         if cost_diff > 0:
                             user = session.get(User, current_user.id)
@@ -773,7 +795,7 @@ async def update_monitor(monitor_id: int, request: MonitorUpdateRequest, current
             new_end = cur_end + timedelta(days=request.extend_days)
             # 按新增天数和当前频率计算需补扣积分（与创建时相同公式）
             extend_minutes = request.extend_days * 24 * 60
-            extend_cost = max(1, math.ceil((extend_minutes / (task.interval_minutes or 240)) * 0.1))
+            extend_cost = max(1, math.ceil((extend_minutes / (task.interval_minutes or 240)) * cost_per_check))
             user = session.get(User, current_user.id)
             if not user or user.credits < extend_cost:
                 raise HTTPException(

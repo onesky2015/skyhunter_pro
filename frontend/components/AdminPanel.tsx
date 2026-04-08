@@ -19,6 +19,7 @@ import { DashboardTab } from './admin/DashboardTab';
 import { AnalyticsTab } from './admin/AnalyticsTab';
 import { CostsTab } from './admin/CostsTab';
 import { SecurityTab } from './admin/SecurityTab';
+import { ConfigsTab } from './admin/ConfigsTab';
 
 interface AdminPanelProps {
   visible: boolean;
@@ -27,7 +28,7 @@ interface AdminPanelProps {
   on401: () => void;
 }
 
-type TabKey = 'dashboard' | 'users' | 'monitors' | 'airports' | 'analytics' | 'costs' | 'security';
+type TabKey = 'dashboard' | 'users' | 'monitors' | 'airports' | 'analytics' | 'costs' | 'configs' | 'security';
 
 const AIRPORT_TYPE_OPTIONS = [
   'large_airport',
@@ -534,6 +535,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 { key: 'airports', label: t('admin', 'airports') },
                 { key: 'analytics', label: t('admin', 'analytics') },
                 { key: 'costs', label: t('admin', 'costs') },
+                { key: 'configs', label: t('admin', 'configs') },
                 { key: 'security', label: t('admin', 'security') },
               ] as { key: TabKey; label: string }[]).map((tab) => (
                 <TouchableOpacity
@@ -549,7 +551,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </View>
           </ScrollView>
 
-          {loading && !['dashboard', 'airports', 'analytics', 'costs', 'security'].includes(activeTab) ? (
+          {loading && !['dashboard', 'airports', 'analytics', 'costs', 'configs', 'security'].includes(activeTab) ? (
             <View style={styles.center}>
               <ActivityIndicator size="large" color="#00FF00" />
             </View>
@@ -720,6 +722,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
               {activeTab === 'costs' && (
                 <CostsTab userToken={userToken} on401={on401} />
+              )}
+
+              {activeTab === 'configs' && (
+                <ConfigsTab userToken={userToken} on401={on401} />
               )}
 
               {activeTab === 'security' && (
