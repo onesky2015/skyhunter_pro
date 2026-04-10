@@ -75,6 +75,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     iata_code: '', icao_code: '', name: '', municipality: '',
     iso_country: '', iso_region: '', airport_type: 'medium_airport',
     latitude: '', longitude: '', is_disabled: false,
+    name_zh: '', municipality_zh: '',
   });
   const [formSaving, setFormSaving] = useState(false);
 
@@ -177,6 +178,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       iata_code: '', icao_code: '', name: '', municipality: '',
       iso_country: '', iso_region: '', airport_type: 'medium_airport',
       latitude: '', longitude: '', is_disabled: false,
+      name_zh: '', municipality_zh: '',
     });
     setEditModalVisible(true);
   };
@@ -194,6 +196,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       latitude: ap.latitude != null ? String(ap.latitude) : '',
       longitude: ap.longitude != null ? String(ap.longitude) : '',
       is_disabled: ap.is_disabled,
+      name_zh: ap.name_zh || '',
+      municipality_zh: ap.municipality_zh || '',
     });
     setEditModalVisible(true);
   };
@@ -217,6 +221,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         latitude: formData.latitude ? parseFloat(formData.latitude) : null,
         longitude: formData.longitude ? parseFloat(formData.longitude) : null,
         is_disabled: formData.is_disabled,
+        name_zh: formData.name_zh.trim() || null,
+        municipality_zh: formData.municipality_zh.trim() || null,
       };
 
       if (editAirport) {
@@ -453,8 +459,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             <Text style={s.fieldLabel}>Airport Name *</Text>
             <TextInput style={s.fieldInput} value={formData.name} onChangeText={(v) => setFormData((p) => ({ ...p, name: v }))} placeholder="John F. Kennedy International Airport" placeholderTextColor="#666" />
 
+            <Text style={s.fieldLabel}>中文机场名称</Text>
+            <TextInput style={s.fieldInput} value={formData.name_zh} onChangeText={(v) => setFormData((p) => ({ ...p, name_zh: v }))} placeholder="约翰·F·肯尼迪国际机场" placeholderTextColor="#666" />
+
             <Text style={s.fieldLabel}>City</Text>
             <TextInput style={s.fieldInput} value={formData.municipality} onChangeText={(v) => setFormData((p) => ({ ...p, municipality: v }))} placeholder="New York" placeholderTextColor="#666" />
+
+            <Text style={s.fieldLabel}>中文城市名称</Text>
+            <TextInput style={s.fieldInput} value={formData.municipality_zh} onChangeText={(v) => setFormData((p) => ({ ...p, municipality_zh: v }))} placeholder="纽约" placeholderTextColor="#666" />
 
             <Text style={s.fieldLabel}>Country (ISO) *</Text>
             <TextInput style={s.fieldInput} value={formData.iso_country} onChangeText={(v) => setFormData((p) => ({ ...p, iso_country: v }))} placeholder="US" placeholderTextColor="#666" maxLength={2} autoCapitalize="characters" />

@@ -208,6 +208,8 @@ export interface AirportSearchResult {
   municipality: string | null;
   iso_country: string;
   airport_type: string;
+  name_zh: string | null;
+  municipality_zh: string | null;
 }
 
 /** Admin 机场详情 */
@@ -223,6 +225,8 @@ export interface AdminAirport {
   latitude: number | null;
   longitude: number | null;
   is_disabled: boolean;
+  name_zh: string | null;
+  municipality_zh: string | null;
 }
 
 /** Admin 机场列表分页响应 */

@@ -181,6 +181,22 @@
       },
       "drift": "warning: MVP 的 price_history 表外键名为 subscription_id，Pro 改为 monitor_id。MVP 包含 airline_name/flight_number 字段，Pro 版缺失这两个字段。"
     },
+    "predictive_search_records": {
+      "table_name": "predictive_search_records",
+      "orm_class": "PredictiveSearchRecord",
+      "description": "热力图搜索仅追加存档，与 flight_cache 隔离；request_json + outcome_json 供离线 AI/预测训练。可通过 PREDICTIVE_SEARCH_LOG_ENABLED=false 关闭写入。",
+      "fields": {
+        "id": { "type": "int", "primary_key": true, "auto_increment": true },
+        "user_id": { "type": "int", "nullable": true, "index": true },
+        "search_id": { "type": "str", "index": true },
+        "recorded_at": { "type": "str", "index": true },
+        "credits_charged": { "type": "int" },
+        "app_version": { "type": "str" },
+        "request_json": { "type": "str" },
+        "outcome_json": { "type": "str" }
+      },
+      "drift": "info: Pro 新增。不向普通用户暴露；Admin GET /api/v1/admin/predictive-search-dataset 分页导出。"
+    },
     "password_resets": {
       "table_name": "password_resets",
       "orm_class": "PasswordReset",

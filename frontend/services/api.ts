@@ -755,12 +755,13 @@ export const adminApi = {
 
 export const airportApi = {
   /** 根据关键词搜索机场（支持 IATA 代码、城市名、机场名） */
-  search: async (query: string, limit: number = 10): Promise<AirportSearchResult[]> => {
+  search: async (query: string, limit: number = 10, signal?: AbortSignal): Promise<AirportSearchResult[]> => {
     const trimmed = query.trim();
     if (!trimmed) return [];
     const params = new URLSearchParams({ q: trimmed, limit: String(limit) });
     const response = await fetch(`${API_URL}/api/v1/airports/search?${params}`, {
       headers: { Accept: 'application/json' },
+      signal,
     });
     if (!response.ok) return [];
     return response.json();

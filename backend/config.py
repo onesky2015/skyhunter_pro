@@ -15,6 +15,10 @@ if _mock_env not in ("true", "false", "1", "0"):
     )
 USE_MOCK_DATA: bool = _mock_env in ("true", "1")
 
+# 为 false 时跳过写入 predictive_search_records（合规关闭训练集采集）
+_PRED_LOG = os.getenv("PREDICTIVE_SEARCH_LOG_ENABLED", "true").strip().lower()
+PREDICTIVE_SEARCH_LOG_ENABLED: bool = _PRED_LOG in ("true", "1", "yes")
+
 SERPAPI_API_KEY: str = os.getenv("SERPAPI_API_KEY", "")
 CACHE_HOURS: int = int(os.getenv("CACHE_HOURS", "4"))
 SCHEDULER_INTERVAL_HOURS: int = int(os.getenv("SCHEDULER_INTERVAL_HOURS", "4"))

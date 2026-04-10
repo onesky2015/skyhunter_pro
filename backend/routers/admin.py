@@ -2,13 +2,24 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File,
 from sqlmodel import Session, select
 from sqlalchemy import func
 from datetime import datetime
-from typing import List
+from typing import List, Optional
+import json
 import csv
 import io
 import os
 import shutil
 from db import engine
-from models.database import User, MonitorTask, PriceHistory, PasswordReset, TransactionHistory, Airport, SystemConfig, utc_iso_now
+from models.database import (
+    User,
+    MonitorTask,
+    PriceHistory,
+    PasswordReset,
+    TransactionHistory,
+    Airport,
+    SystemConfig,
+    PredictiveSearchRecord,
+    utc_iso_now,
+)
 from schemas.api_models import *
 from api.deps import get_current_admin
 from config import logger
@@ -316,6 +327,7 @@ async def admin_list_airports(
                     airport_type=a.airport_type,
                     latitude=a.latitude, longitude=a.longitude,
                     is_disabled=a.is_disabled,
+                    name_zh=a.name_zh, municipality_zh=a.municipality_zh,
                 )
                 for a in airports
             ],
@@ -354,6 +366,8 @@ async def admin_create_airport(
             iso_region=request.iso_region.strip() if request.iso_region else None,
             airport_type=request.airport_type,
             latitude=request.latitude,
+            name_zh=request.name_zh.strip() if request.name_zh else None,
+            municipality_zh=request.municipality_zh.strip() if request.municipality_zh else None,
             longitude=request.longitude,
         )
         session.add(airport)
@@ -368,6 +382,7 @@ async def admin_create_airport(
             airport_type=airport.airport_type,
             latitude=airport.latitude, longitude=airport.longitude,
             is_disabled=airport.is_disabled,
+            name_zh=airport.name_zh, municipality_zh=airport.municipality_zh,
         )
 
 
@@ -416,6 +431,10 @@ async def admin_update_airport(
             airport.longitude = request.longitude
         if request.is_disabled is not None:
             airport.is_disabled = request.is_disabled
+        if request.name_zh is not None:
+            airport.name_zh = request.name_zh.strip() or None
+        if request.municipality_zh is not None:
+            airport.municipality_zh = request.municipality_zh.strip() or None
 
         session.add(airport)
         session.commit()
@@ -429,6 +448,7 @@ async def admin_update_airport(
             airport_type=airport.airport_type,
             latitude=airport.latitude, longitude=airport.longitude,
             is_disabled=airport.is_disabled,
+            name_zh=airport.name_zh, municipality_zh=airport.municipality_zh,
         )
 
 
@@ -475,6 +495,8 @@ async def admin_upload_airports_csv(
             "airport_type": row.get("type", "").strip() or "medium_airport",
             "latitude": float(row["latitude_deg"]) if row.get("latitude_deg", "").strip() else None,
             "longitude": float(row["longitude_deg"]) if row.get("longitude_deg", "").strip() else None,
+            "name_zh": row.get("name_zh", "").strip() or None,
+            "municipality_zh": row.get("municipality_zh", "").strip() or None,
         })
 
     total_parsed = len(airports_to_add)
@@ -552,4 +574,70 @@ async def admin_set_config(request: AdminConfigRequest, admin_user: User = Depen
         session.refresh(config)
         logger.info(f"⚙️ Admin #{admin_user.id} updated config key: {config.key}")
         return AdminConfigResponse(**config.model_dump())
+
+
+# ============================================================================
+# API：预测用搜索数据集（仅 Admin，与业务 API 隔离）
+# ============================================================================
+
+
+@router.get(
+    "/api/v1/admin/predictive-search-dataset",
+    response_model=PredictiveSearchDatasetListResponse,
+    summary="分页列出预测用热力图搜索存档",
+    tags=["admin-predictive-dataset"],
+)
+async def admin_list_predictive_search_dataset(
+    page: int = FastQuery(1, ge=1),
+    page_size: int = FastQuery(20, ge=1, le=100),
+    since: Optional[str] = FastQuery(
+        None,
+        description="可选，recorded_at >= since（ISO 8601 字符串前缀比较）",
+    ),
+    admin_user: User = Depends(get_current_admin),
+):
+    """供导出 JSON/对接离线训练；单条内含完整 request 与整理后的 outcome。"""
+    offset = (page - 1) * page_size
+    with Session(engine) as session:
+        filters = []
+        if since:
+            filters.append(PredictiveSearchRecord.recorded_at >= since)
+        count_stmt = select(func.count()).select_from(PredictiveSearchRecord)
+        list_stmt = select(PredictiveSearchRecord).order_by(PredictiveSearchRecord.id.desc())
+        if filters:
+            count_stmt = count_stmt.where(*filters)
+            list_stmt = list_stmt.where(*filters)
+        total = session.exec(count_stmt).one() or 0
+        rows = session.exec(list_stmt.offset(offset).limit(page_size)).all()
+
+    items: List[PredictiveSearchDatasetItem] = []
+    for r in rows:
+        try:
+            req_d = json.loads(r.request_json)
+            out_d = json.loads(r.outcome_json)
+        except json.JSONDecodeError:
+            req_d, out_d = {}, {}
+        if not isinstance(req_d, dict):
+            req_d = {}
+        if not isinstance(out_d, dict):
+            out_d = {}
+        items.append(
+            PredictiveSearchDatasetItem(
+                id=r.id,
+                user_id=r.user_id,
+                search_id=r.search_id,
+                recorded_at=r.recorded_at,
+                credits_charged=r.credits_charged,
+                app_version=r.app_version or "",
+                request=req_d,
+                outcome=out_d,
+            )
+        )
+
+    return PredictiveSearchDatasetListResponse(
+        total=int(total),
+        page=page,
+        page_size=page_size,
+        items=items,
+    )
 

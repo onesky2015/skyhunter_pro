@@ -120,6 +120,25 @@ class PriceHistory(SQLModel, table=True):
     booking_link: Optional[str] = SQLField(default=None)
 
 
+class PredictiveSearchRecord(SQLModel, table=True):
+    """热力图搜索的仅追加存档：与 flight_cache 等业务表隔离，专供离线模型与评估使用。"""
+    __tablename__ = "predictive_search_records"
+    __table_args__ = {"extend_existing": True}
+
+    id: Optional[int] = SQLField(default=None, primary_key=True)
+    user_id: Optional[int] = SQLField(default=None, index=True, description="发起用户 ID")
+    search_id: str = SQLField(index=True, description="与 transaction_history.reference_id 对齐")
+    recorded_at: str = SQLField(
+        default_factory=utc_iso_now,
+        index=True,
+        description="写入时间 ISO",
+    )
+    credits_charged: int = SQLField(default=0, description="本次搜索消耗积分")
+    app_version: str = SQLField(default="", description="后端 APP_VERSION")
+    request_json: str = SQLField(description="SearchRequest 完整 JSON")
+    outcome_json: str = SQLField(description="聚合指标 + 热力图 + 逐日特征 JSON（已去除 booking_link）")
+
+
 class MonitorActivityLog(SQLModel, table=True):
     """监控任务活动日志：创建、暂停、恢复、达到目标、过期、存档等"""
     __tablename__ = "monitor_activity_log"
@@ -153,6 +172,8 @@ class Airport(SQLModel, table=True):
     latitude: Optional[float] = SQLField(default=None, description="纬度")
     longitude: Optional[float] = SQLField(default=None, description="经度")
     is_disabled: bool = SQLField(default=False, description="是否已禁用（关闭/错误的机场）")
+    name_zh: Optional[str] = SQLField(default=None, description="中文机场名称（如 北京首都国际机场）")
+    municipality_zh: Optional[str] = SQLField(default=None, index=True, description="中文城市名称（如 北京）")
 
 
 class PasswordReset(SQLModel, table=True):

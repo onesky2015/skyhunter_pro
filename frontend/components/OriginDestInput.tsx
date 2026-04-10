@@ -29,7 +29,7 @@ interface AirportInputProps {
   zIndex?: number;
 }
 
-const DEBOUNCE_MS = 250;
+const DEBOUNCE_MS = 350;
 
 const AirportInput: React.FC<AirportInputProps> = ({
   label,
@@ -45,6 +45,9 @@ const AirportInput: React.FC<AirportInputProps> = ({
   const [showDropdown, setShowDropdown] = useState(false);
   const [isSelecting, setIsSelecting] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const composingRef = useRef(false);
+  const latestTextRef = useRef(value);
   const inputRef = useRef<TextInput>(null);
 
   useEffect(() => {
@@ -54,41 +57,80 @@ const AirportInput: React.FC<AirportInputProps> = ({
   }, [value, isSelecting]);
 
   const fetchSuggestions = useCallback(async (query: string) => {
-    if (query.length < 1) {
+    const trimmed = query.trim();
+    if (trimmed.length < 1) {
       setSuggestions([]);
       setShowDropdown(false);
       return;
     }
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      const results = await airportApi.search(query, 8);
+      const results = await airportApi.search(trimmed, 8, controller.signal);
+      if (controller.signal.aborted) return;
       setSuggestions(results);
       setShowDropdown(results.length > 0);
     } catch {
+      if (controller.signal.aborted) return;
       setSuggestions([]);
       setShowDropdown(false);
     }
   }, []);
 
+  const scheduleSearch = useCallback(
+    (text: string) => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => {
+        if (!composingRef.current) {
+          fetchSuggestions(text);
+        }
+      }, DEBOUNCE_MS);
+    },
+    [fetchSuggestions],
+  );
+
   const handleChangeText = useCallback(
     (text: string) => {
       setIsSelecting(false);
       setInputText(text);
+      latestTextRef.current = text;
 
-      const upper = text.toUpperCase();
+      const upper = text.trim().toUpperCase();
       if (upper.length === 3 && /^[A-Z]{3}$/.test(upper)) {
         onSelect(upper);
       }
 
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => fetchSuggestions(text), DEBOUNCE_MS);
+      if (!composingRef.current) {
+        scheduleSearch(text);
+      }
     },
-    [fetchSuggestions, onSelect],
+    [scheduleSearch, onSelect],
   );
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const node = (inputRef.current as any)?._node ?? (inputRef.current as any);
+    if (!node?.addEventListener) return;
+
+    const onStart = () => { composingRef.current = true; };
+    const onEnd = () => {
+      composingRef.current = false;
+      scheduleSearch(latestTextRef.current);
+    };
+    node.addEventListener('compositionstart', onStart);
+    node.addEventListener('compositionend', onEnd);
+    return () => {
+      node.removeEventListener('compositionstart', onStart);
+      node.removeEventListener('compositionend', onEnd);
+    };
+  }, [scheduleSearch]);
 
   const handleSelect = useCallback(
     (airport: AirportSearchResult) => {
       setIsSelecting(true);
-      const display = `${airport.iata_code} - ${airport.municipality || airport.name}`;
+      const city = airport.municipality_zh || airport.municipality;
+      const display = `${airport.iata_code} - ${city || airport.name}`;
       setInputText(display);
       onSelect(airport.iata_code);
       setSuggestions([]);
@@ -127,6 +169,9 @@ const AirportInput: React.FC<AirportInputProps> = ({
             ? '🛩'
             : '•';
 
+      const displayName = item.name_zh || item.name;
+      const displayCity = item.municipality_zh || item.municipality;
+
       return (
         <TouchableOpacity
           style={styles.suggestionItem}
@@ -139,10 +184,10 @@ const AirportInput: React.FC<AirportInputProps> = ({
           </View>
           <View style={styles.suggestionRight}>
             <Text style={styles.airportName} numberOfLines={1}>
-              {item.name}
+              {displayName}
             </Text>
             <Text style={styles.cityCountry} numberOfLines={1}>
-              {[item.municipality, item.iso_country].filter(Boolean).join(', ')}
+              {[displayCity, item.iso_country].filter(Boolean).join(', ')}
             </Text>
           </View>
         </TouchableOpacity>
@@ -163,7 +208,7 @@ const AirportInput: React.FC<AirportInputProps> = ({
         onBlur={handleBlur}
         placeholder={placeholder}
         placeholderTextColor="#666"
-        autoCapitalize="characters"
+        autoCapitalize="none"
         autoCorrect={false}
       />
       {showDropdown && (

@@ -42,6 +42,8 @@ def _run_migrations():
     migrations = [
         ("ALTER TABLE monitor_tasks ADD COLUMN email_notified_at VARCHAR", "monitor_tasks.email_notified_at"),
         ("ALTER TABLE airports ADD COLUMN is_disabled BOOLEAN DEFAULT FALSE", "airports.is_disabled"),
+        ("ALTER TABLE airports ADD COLUMN name_zh VARCHAR", "airports.name_zh"),
+        ("ALTER TABLE airports ADD COLUMN municipality_zh VARCHAR", "airports.municipality_zh"),
         ("ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT TRUE", "users.email_verified（已有用户默认 True）"),
         ("ALTER TABLE users ADD COLUMN email_verified_at VARCHAR", "users.email_verified_at"),
         ("ALTER TABLE users ADD COLUMN country VARCHAR", "users.country"),
@@ -65,6 +67,103 @@ def _run_migrations():
             pass
 
 
+def _seed_default_configs():
+    """首次启动时写入默认 SystemConfig（已有 key 不覆盖，保护用户自定义值）。"""
+    import json
+    from sqlmodel import Session, select
+    from models.database import SystemConfig
+
+    defaults = {
+        "airport_search_aliases": json.dumps(
+            {
+                "北京": ["PEK", "PKX"],
+                "上海": ["PVG", "SHA"],
+                "广州": ["CAN"],
+                "深圳": ["SZX"],
+                "成都": ["CTU", "TFU"],
+                "重庆": ["CKG"],
+                "杭州": ["HGH"],
+                "南京": ["NKG"],
+                "武汉": ["WUH"],
+                "西安": ["XIY"],
+                "昆明": ["KMG"],
+                "长沙": ["CSX"],
+                "厦门": ["XMN"],
+                "青岛": ["TAO"],
+                "大连": ["DLC"],
+                "天津": ["TSN"],
+                "沈阳": ["SHE"],
+                "哈尔滨": ["HRB"],
+                "海口": ["HAK"],
+                "三亚": ["SYX"],
+                "郑州": ["CGO"],
+                "福州": ["FOC"],
+                "珠海": ["ZUH"],
+                "贵阳": ["KWE"],
+                "南宁": ["NNG"],
+                "乌鲁木齐": ["URC"],
+                "兰州": ["LHW"],
+                "银川": ["INC"],
+                "拉萨": ["LXA"],
+                "呼和浩特": ["HET"],
+                "太原": ["TYN"],
+                "石家庄": ["SJW"],
+                "合肥": ["HFE"],
+                "南昌": ["KHN"],
+                "济南": ["TNA"],
+                "长春": ["CGQ"],
+                "温州": ["WNZ"],
+                "宁波": ["NGB"],
+                "无锡": ["WUX"],
+                "烟台": ["YNT"],
+                "东京": ["NRT", "HND"],
+                "大阪": ["KIX", "ITM"],
+                "首尔": ["ICN", "GMP"],
+                "曼谷": ["BKK", "DMK"],
+                "新加坡": ["SIN"],
+                "吉隆坡": ["KUL"],
+                "河内": ["HAN"],
+                "胡志明": ["SGN"],
+                "雅加达": ["CGK"],
+                "马尼拉": ["MNL"],
+                "台北": ["TPE", "TSA"],
+                "香港": ["HKG"],
+                "澳门": ["MFM"],
+                "悉尼": ["SYD"],
+                "墨尔本": ["MEL"],
+                "伦敦": ["LHR", "LGW", "STN"],
+                "巴黎": ["CDG", "ORY"],
+                "纽约": ["JFK", "EWR", "LGA"],
+                "洛杉矶": ["LAX"],
+                "旧金山": ["SFO"],
+                "芝加哥": ["ORD", "MDW"],
+                "多伦多": ["YYZ"],
+                "温哥华": ["YVR"],
+                "迪拜": ["DXB"],
+                "莫斯科": ["SVO", "DME"],
+                "法兰克福": ["FRA"],
+                "阿姆斯特丹": ["AMS"],
+                "罗马": ["FCO"],
+                "马德里": ["MAD"],
+                "苏黎世": ["ZRH"],
+                "伊斯坦布尔": ["IST"],
+                "多哈": ["DOH"],
+            },
+            ensure_ascii=False,
+        ),
+    }
+
+    with Session(engine) as session:
+        for key, value in defaults.items():
+            existing = session.exec(
+                select(SystemConfig).where(SystemConfig.key == key)
+            ).first()
+            if existing is None:
+                session.add(SystemConfig(key=key, value=value))
+                logger.info(f"  🌱 已写入默认配置 {key}")
+        session.commit()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import models.database
@@ -74,6 +173,7 @@ async def lifespan(app: FastAPI):
     try:
         SQLModel.metadata.create_all(engine)
         _run_migrations()
+        _seed_default_configs()
         logger.info("✅ 数据库表结构初始化成功")
     except Exception as e:
         logger.error(f"❌ 数据库初始化失败: {e}")

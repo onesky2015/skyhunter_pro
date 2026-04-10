@@ -36,6 +36,8 @@ def import_airports():
                 airport_type=row.get("type", "").strip(),
                 latitude=float(row["latitude_deg"]) if row.get("latitude_deg", "").strip() else None,
                 longitude=float(row["longitude_deg"]) if row.get("longitude_deg", "").strip() else None,
+                name_zh=row.get("name_zh", "").strip() or None,
+                municipality_zh=row.get("municipality_zh", "").strip() or None,
             ))
 
     logger.info(f"从 CSV 解析出 {len(airports)} 条机场记录（含 IATA 代码）")

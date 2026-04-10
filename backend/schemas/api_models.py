@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 class SignupRequest(BaseModel):
     """注册请求"""
@@ -173,6 +173,25 @@ class SearchResponse(BaseModel):
     return_lowest_price_date: Optional[str] = None
     return_heatmap_data: List[HeatmapCell] = []
 
+
+class PredictiveSearchDatasetItem(BaseModel):
+    """单条预测用搜索存档（Admin 导出）。"""
+    id: int
+    user_id: Optional[int] = None
+    search_id: str
+    recorded_at: str
+    credits_charged: int
+    app_version: str
+    request: Dict[str, Any]
+    outcome: Dict[str, Any]
+
+
+class PredictiveSearchDatasetListResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[PredictiveSearchDatasetItem]
+
 class AdminStatsResponse(BaseModel):
     """管理员仪表盘统计数据"""
     total_users: int
@@ -275,6 +294,8 @@ class AirportSearchResult(BaseModel):
     municipality: Optional[str] = None
     iso_country: str
     airport_type: str
+    name_zh: Optional[str] = None
+    municipality_zh: Optional[str] = None
 
 
 # ========== 机场管理（Admin） ==========
@@ -292,6 +313,8 @@ class AdminAirportResponse(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     is_disabled: bool = False
+    name_zh: Optional[str] = None
+    municipality_zh: Optional[str] = None
 
 
 class AdminAirportListResponse(BaseModel):
@@ -313,6 +336,8 @@ class AdminAirportCreateRequest(BaseModel):
     airport_type: str = Field(default="medium_airport")
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    name_zh: Optional[str] = Field(None, max_length=200, description="中文机场名称")
+    municipality_zh: Optional[str] = Field(None, max_length=100, description="中文城市名称")
 
 
 class AdminAirportUpdateRequest(BaseModel):
@@ -327,6 +352,8 @@ class AdminAirportUpdateRequest(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     is_disabled: Optional[bool] = None
+    name_zh: Optional[str] = Field(None, max_length=200, description="中文机场名称")
+    municipality_zh: Optional[str] = Field(None, max_length=100, description="中文城市名称")
 
 
 class AdminAirportCsvUploadResponse(BaseModel):

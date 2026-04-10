@@ -13,6 +13,7 @@ from services.flight import _search_range, _build_flight_cache_signature, _class
 from services.billing import _record_transaction, _refund_user_credits
 from services.scheduler import _monitor_response_from_task
 from services.email import send_alert_email
+from services.predictive_search_dataset import append_predictive_search_record_safe
 
 router = APIRouter()
 
@@ -22,7 +23,50 @@ router = APIRouter()
 # ============================================================================
 
 from fastapi import Query as FastQuery
-from sqlalchemy import or_, func, case
+from sqlalchemy import or_, func
+from services.airport_search import normalize_airport_query, parse_airport_alias_config, resolve_airport_alias_iata
+
+
+def _airport_type_rank(airport_type: Optional[str]) -> int:
+    if airport_type == "large_airport":
+        return 0
+    if airport_type == "medium_airport":
+        return 1
+    if airport_type == "small_airport":
+        return 2
+    return 3
+
+
+def _airport_search_rank(airport: Airport, keyword: str, original_query: str, alias_iata_codes: List[str]) -> tuple[int, int, int, str]:
+    iata_code = (airport.iata_code or "").upper()
+    municipality = (airport.municipality or "").upper()
+    airport_name = (airport.name or "").upper()
+    municipality_zh = airport.municipality_zh or ""
+    name_zh = airport.name_zh or ""
+    alias_rank = alias_iata_codes.index(iata_code) if iata_code in alias_iata_codes else len(alias_iata_codes) + 10
+
+    if iata_code in alias_iata_codes:
+        match_rank = 0
+    elif iata_code == keyword:
+        match_rank = 1
+    elif keyword and iata_code.startswith(keyword):
+        match_rank = 2
+    elif original_query and municipality_zh and original_query in municipality_zh:
+        match_rank = 3
+    elif original_query and name_zh and original_query in name_zh:
+        match_rank = 3
+    elif keyword and municipality.startswith(keyword):
+        match_rank = 4
+    elif keyword and keyword in municipality:
+        match_rank = 5
+    elif keyword and airport_name.startswith(keyword):
+        match_rank = 6
+    elif keyword and keyword in airport_name:
+        match_rank = 7
+    else:
+        match_rank = 8
+
+    return (match_rank, alias_rank, _airport_type_rank(airport.airport_type), iata_code)
 
 
 @router.get("/api/v1/airports/search", response_model=List[AirportSearchResult], summary="机场自动补全搜索", tags=["airports"])
@@ -30,36 +74,38 @@ async def search_airports(
     q: str = FastQuery(..., min_length=1, max_length=50, description="搜索关键词：IATA代码、城市名或机场名称"),
     limit: int = FastQuery(default=10, ge=1, le=30, description="返回结果数量上限"),
 ):
-    """根据 IATA 代码、城市名或机场名称模糊搜索机场。"""
-    keyword = q.strip().upper()
+    """根据 IATA 代码、城市名、机场名称或常见中文别名模糊搜索机场。"""
+    normalized_query = normalize_airport_query(q)
+    keyword = normalized_query.upper()
     if not keyword:
         return []
 
-    type_priority = case(
-        (Airport.airport_type == "large_airport", 0),
-        (Airport.airport_type == "medium_airport", 1),
-        (Airport.airport_type == "small_airport", 2),
-        else_=3,
-    )
-
     with Session(engine) as session:
+        alias_config = session.exec(
+            select(SystemConfig).where(SystemConfig.key == "airport_search_aliases")
+        ).first()
+        alias_map = parse_airport_alias_config(alias_config.value if alias_config else None)
+        alias_iata_codes = resolve_airport_alias_iata(normalized_query, alias_map)
+        match_conditions = [
+            func.upper(Airport.iata_code).like(f"{keyword}%"),
+            func.upper(Airport.municipality).like(f"%{keyword}%"),
+            func.upper(Airport.name).like(f"%{keyword}%"),
+            Airport.municipality_zh.like(f"%{normalized_query}%"),
+            Airport.name_zh.like(f"%{normalized_query}%"),
+        ]
+        if alias_iata_codes:
+            match_conditions.insert(0, func.upper(Airport.iata_code).in_(alias_iata_codes))
+
         stmt = (
             select(Airport)
             .where(
                 Airport.is_disabled == False,
-                or_(
-                    func.upper(Airport.iata_code).like(f"{keyword}%"),
-                    func.upper(Airport.municipality).like(f"%{keyword}%"),
-                    func.upper(Airport.name).like(f"%{keyword}%"),
-                ),
+                or_(*match_conditions),
             )
-            .order_by(
-                (func.upper(Airport.iata_code) == keyword).desc(),
-                type_priority,
-            )
-            .limit(limit)
+            .limit(max(limit * 5, 20))
         )
         results = session.exec(stmt).all()
+        results.sort(key=lambda airport: _airport_search_rank(airport, keyword, normalized_query, alias_iata_codes))
 
     return [
         AirportSearchResult(
@@ -68,8 +114,10 @@ async def search_airports(
             municipality=ap.municipality,
             iso_country=ap.iso_country,
             airport_type=ap.airport_type,
+            name_zh=ap.name_zh,
+            municipality_zh=ap.municipality_zh,
         )
-        for ap in results
+        for ap in results[:limit]
     ]
 
 
@@ -113,6 +161,7 @@ async def search_flights(request: SearchRequest, current_user: User = Depends(ge
             raise HTTPException(status_code=400, detail="返程日期必须晚于出发日期")
 
     # ── 积分检查 & 扣除：分级定价（单日 1 积分，多日 5 积分，可由 SystemConfig 覆盖） ──
+    deducted_credits = 0
     with Session(engine) as session:
         if request.days == 1:
             cfg = session.exec(select(SystemConfig).where(SystemConfig.key == "search_cost_single_day")).first()
@@ -142,10 +191,12 @@ async def search_flights(request: SearchRequest, current_user: User = Depends(ge
             reference_type="search",
             reference_id=search_id,
         )
+        deducted_credits = search_cost
         logger.info(f"💳 User #{current_user.id} 搜索扣除 {search_cost} 积分，剩余: {user.credits}")
 
     logger.info(f"🔍 [{search_id}] User #{current_user.id} 搜索: {origin}->{destination}")
 
+    return_range_results: List[dict] = []
     try:
         range_results = _search_range(
             origin, destination, start_date_obj, request.days,
@@ -203,7 +254,7 @@ async def search_flights(request: SearchRequest, current_user: User = Depends(ge
                     return_lowest_price_date = cell.date
                     break
 
-    return SearchResponse(
+    response = SearchResponse(
         search_id=search_id, origin=origin, destination=destination,
         start_date=request.start_date, days=request.days, cabin_class=request.cabin_class,
         lowest_price=lowest_price, lowest_price_date=lowest_price_date,
@@ -215,6 +266,16 @@ async def search_flights(request: SearchRequest, current_user: User = Depends(ge
         return_lowest_price_date=return_lowest_price_date,
         return_heatmap_data=return_heatmap_data,
     )
+    append_predictive_search_record_safe(
+        user_id=current_user.id,
+        search_id=search_id,
+        request=request,
+        response=response,
+        credits_charged=deducted_credits,
+        outbound_daily=range_results,
+        return_daily=return_range_results if return_range_results else None,
+    )
+    return response
 
 
 # ============================================================================
