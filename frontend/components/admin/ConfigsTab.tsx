@@ -76,11 +76,13 @@ export const ConfigsTab: React.FC<{ userToken: string | null; on401: () => void 
     { key: 'search_cost_single_day', label: '每次固定日期搜索扣除积分数', defaultValue: '1' },
     { key: 'search_cost_multi_day', label: '每次大范围热力图搜索扣除积分数', defaultValue: '5' },
     { key: 'monitor_cost_per_check', label: '监控任务单次扫描扣除积分基数', defaultValue: '0.1' },
-    { key: 'credit_pricing_packages', label: '前端购买积分套餐与美元价格 (JSON格式)', defaultValue: '{\n  "credits_50": {"credits": 50, "price_usd": 0.99, "stripe_price_id": ""},\n  "credits_200": {"credits": 200, "price_usd": 2.99, "stripe_price_id": ""}\n}' },
   ];
 
+  /** 已在「积分定价」专用页维护，避免 JSON 手改与表单冲突 */
+  const HIDDEN_CONFIG_KEYS = new Set(['credit_pricing_packages']);
+
   // Merge known configs and custom configs from DB
-  const displayList = [...configs];
+  const displayList = [...configs].filter((c) => !HIDDEN_CONFIG_KEYS.has(c.key));
   KNOWN_CONFIGS.forEach(kc => {
     if (!displayList.find(c => c.key === kc.key)) {
       displayList.push({ key: kc.key, value: `(未设置 - 默认值: ${kc.defaultValue})`, description: kc.label });
@@ -100,9 +102,8 @@ export const ConfigsTab: React.FC<{ userToken: string | null; on401: () => void 
   return (
     <View style={s.container}>
       <Text style={s.title}>{t('admin', 'configsTitle')}</Text>
-      <Text style={s.descText}>
-        {t('admin', 'configsDesc')}
-      </Text>
+      <Text style={s.descText}>{t('admin', 'configsDesc')}</Text>
+      <Text style={s.hintPricing}>{t('admin', 'configsHintPricing')}</Text>
       
       {displayList.map((c) => {
         const knownMatch = KNOWN_CONFIGS.find(k => k.key === c.key);
@@ -204,6 +205,7 @@ export const ConfigsTab: React.FC<{ userToken: string | null; on401: () => void 
 const s = StyleSheet.create({
   container: { paddingBottom: 40 },
   title: { color: '#00FF00', fontSize: 18, fontWeight: 'bold', marginBottom: 16 },
+  hintPricing: { color: '#666', fontSize: 12, marginBottom: 14, lineHeight: 18 },
   card: { backgroundColor: '#222', padding: 16, borderRadius: 8, marginBottom: 12, borderWidth: 1, borderColor: '#333' },
   keyText: { color: '#00FF00', fontSize: 16, fontWeight: '600', marginBottom: 8 },
   valueText: { color: '#CCC', fontSize: 14, fontFamily: 'monospace', marginBottom: 6 },

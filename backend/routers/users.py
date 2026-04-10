@@ -5,7 +5,7 @@ from sqlmodel import Session, select
 from datetime import datetime, timedelta
 from typing import Optional
 from db import engine
-from models.database import User, PasswordReset, EmailVerification, TransactionHistory, MonitorTask, RefreshToken, PushToken, utc_iso_now
+from models.database import User, PasswordReset, EmailVerification, TransactionHistory, MonitorTask, RefreshToken, PushToken, PredictiveSearchRecord, utc_iso_now
 from schemas.api_models import *
 from api.deps import get_current_user
 from core.security import verify_password, hash_password, create_access_token, generate_reset_token, issue_token_pair
@@ -18,7 +18,8 @@ from core.rate_limit import (
     _clear_rate_limit_attempts
 )
 from config import (
-    logger, 
+    logger,
+    mask_email,
     FORGOT_PASSWORD_WINDOW_SECONDS, 
     FORGOT_PASSWORD_MAX_REQUESTS, 
     RESET_PASSWORD_WINDOW_SECONDS, 
@@ -97,7 +98,7 @@ async def signup(request: SignupRequest, http_request: StarletteRequest, backgro
             reference_id=str(user.id),
         )
 
-        logger.info(f"🆕 新用户注册: {email} (ID: {user.id})，等待邮箱验证")
+        logger.info(f"🆕 新用户注册: {mask_email(email)} (ID: {user.id})，等待邮箱验证")
 
         code = generate_reset_token()
         expires_at = (datetime.utcnow() + timedelta(minutes=15)).isoformat()
@@ -181,7 +182,7 @@ async def verify_email(request: VerifyEmailRequest, http_request: StarletteReque
         session.commit()
         session.refresh(user)
         _clear_rate_limit_attempts(_email_verify_attempts, rate_limit_key)
-        logger.info(f"✅ 邮箱验证成功: {email} (ID: {user.id})")
+        logger.info(f"✅ 邮箱验证成功: {mask_email(email)} (ID: {user.id})")
 
         from core.middleware import _get_client_ip
         client_ip = _get_client_ip(http_request)
@@ -219,14 +220,14 @@ async def resend_verification(request: ResendVerificationRequest, http_request: 
         EMAIL_VERIFY_RESEND_WINDOW_SECONDS,
     )
     if limited:
-        logger.warning(f"📧 重发验证码已限流: {email} (retry_after={retry_after}s)")
+        logger.warning(f"📧 重发验证码已限流: {mask_email(email)} (retry_after={retry_after}s)")
         return success_msg
     _record_rate_limit_attempt(_email_verify_resend_attempts, rate_limit_key)
 
     with Session(engine) as session:
         user = session.exec(select(User).where(User.email == email)).first()
         if not user:
-            logger.info(f"📧 重发验证码: {email} (用户不存在，静默返回)")
+            logger.info(f"📧 重发验证码: {mask_email(email)} (用户不存在，静默返回)")
             return success_msg
 
         if user.email_verified:
@@ -254,7 +255,7 @@ async def resend_verification(request: ResendVerificationRequest, http_request: 
         session.add(verification)
         session.commit()
 
-        logger.info(f"📧 邮箱验证码已重新生成: {email} (expires_in=15m)")
+        logger.info(f"📧 邮箱验证码已重新生成: {mask_email(email)} (expires_in=15m)")
 
     background_tasks.add_task(send_verification_code_email, to_email=email, code=code)
 
@@ -307,7 +308,7 @@ async def login(
         _clear_rate_limit_attempts(_login_attempts, rate_limit_key)
 
         if not user.email_verified:
-            logger.info(f"🔐 用户登录但邮箱未验证: {email} (ID: {user.id})")
+            logger.info(f"🔐 用户登录但邮箱未验证: {mask_email(email)} (ID: {user.id})")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Email not verified",
@@ -340,7 +341,7 @@ async def login(
         session.commit()
         session.refresh(user)
 
-        logger.info(f"🔐 用户登录: {email} (ID: {user.id})")
+        logger.info(f"🔐 用户登录: {mask_email(email)} (ID: {user.id})")
 
         ua = http_request.headers.get("user-agent", "") if http_request else ""
         tokens = issue_token_pair(user, ip_address=login_ip, user_agent=ua)
@@ -399,7 +400,7 @@ async def refresh_token(request: RefreshTokenRequest, http_request: StarletteReq
     ua = http_request.headers.get("user-agent", "")
     tokens = issue_token_pair(user, ip_address=client_ip, user_agent=ua)
 
-    logger.info(f"🔄 Token 已刷新: {user.email} (ID: {user.id})")
+    logger.info(f"🔄 Token 已刷新: {mask_email(user.email)} (ID: {user.id})")
 
     return TokenResponse(
         access_token=tokens["access_token"],
@@ -504,7 +505,7 @@ async def forgot_password(request: ForgotPasswordRequest, http_request: Starlett
         FORGOT_PASSWORD_WINDOW_SECONDS,
     )
     if forgot_limited:
-        logger.warning(f"🔐 忘记密码请求已限流: {email} (retry_after={retry_after}s)")
+        logger.warning(f"🔐 忘记密码请求已限流: {mask_email(email)} (retry_after={retry_after}s)")
         return success_msg
     _record_rate_limit_attempt(_forgot_password_attempts, rate_limit_key)
 
@@ -512,7 +513,7 @@ async def forgot_password(request: ForgotPasswordRequest, http_request: Starlett
         # 检查用户是否存在
         user = session.exec(select(User).where(User.email == email)).first()
         if not user:
-            logger.info(f"🔐 忘记密码请求: {email} (用户不存在，静默返回)")
+            logger.info(f"🔐 忘记密码请求: {mask_email(email)} (用户不存在，静默返回)")
             return success_msg
 
         # 使该邮箱之前未使用的验证码全部失效
@@ -539,7 +540,7 @@ async def forgot_password(request: ForgotPasswordRequest, http_request: Starlett
         session.add(reset_record)
         session.commit()
 
-        logger.info(f"🔐 密码重置码已生成: {email} (expires_in=15m)")
+        logger.info(f"🔐 密码重置码已生成: {mask_email(email)} (expires_in=15m)")
 
     # 发送邮件（非阻塞式）
     background_tasks.add_task(send_reset_code_email, to_email=email, code=code)
@@ -613,7 +614,7 @@ async def reset_password(request: ResetPasswordRequest, http_request: StarletteR
 
         session.commit()
         _clear_rate_limit_attempts(_reset_password_attempts, rate_limit_key)
-        logger.info(f"🔐 密码已重置: {email}")
+        logger.info(f"🔐 密码已重置: {mask_email(email)}")
 
     return {"message": "Password has been reset successfully. Please login with your new password."}
 
@@ -682,12 +683,24 @@ async def delete_account(request: DeleteAccountRequest, current_user: User = Dep
         for tok in refresh_tokens:
             session.delete(tok)
 
+        push_tokens = session.exec(
+            select(PushToken).where(PushToken.user_id == current_user.id)
+        ).all()
+        for pt in push_tokens:
+            session.delete(pt)
+
+        predictive_records = session.exec(
+            select(PredictiveSearchRecord).where(PredictiveSearchRecord.user_id == current_user.id)
+        ).all()
+        for pr in predictive_records:
+            session.delete(pr)
+
         user = session.get(User, current_user.id)
         if user:
             session.delete(user)
 
         session.commit()
-        logger.info(f"🗑️ 用户账号已永久删除: {current_user.email} (ID: {current_user.id})")
+        logger.info(f"🗑️ 用户账号已永久删除: {mask_email(current_user.email)} (ID: {current_user.id})")
 
     return {"message": "Your account and all associated data have been permanently deleted."}
 
@@ -821,13 +834,20 @@ def _refund_user_credits(user_id: int, amount: int, reason: str) -> None:
         logger.error(f"❌ Refund failed for user #{user_id}: {refund_err} ({reason})")
 
 
-@router.post("/api/v1/users/topup", response_model=TopupResponse, summary="充值积分（Mock）", tags=["auth"])
+@router.post("/api/v1/users/topup", response_model=TopupResponse, summary="充值积分（仅开发环境）", tags=["auth"])
 async def topup_credits(request: TopupRequest = TopupRequest(), current_user: User = Depends(get_current_user)):
     """
-    Mock 充值积分端点。
+    开发/测试环境 Mock 充值端点。
 
-    生产环境中应接入支付网关（Stripe / 支付宝等），此处直接增加积分。
+    生产环境已禁用，积分发放仅通过 payments 路由的正式支付流程。
     """
+    from config import USE_MOCK_DATA
+    if not USE_MOCK_DATA:
+        raise HTTPException(
+            status_code=403,
+            detail="This endpoint is disabled in production. Please use the in-app purchase flow.",
+        )
+
     with Session(engine) as session:
         user = session.get(User, current_user.id)
         if not user:
@@ -843,11 +863,11 @@ async def topup_credits(request: TopupRequest = TopupRequest(), current_user: Us
             amount=request.amount,
             credits_before=credits_before,
             credits_after=user.credits,
-            description="Mock credits topup",
+            description="Mock credits topup (dev only)",
             reference_type="topup",
             reference_id=str(request.amount),
         )
-        logger.info(f"💰 User #{user.id} 充值 {request.amount} 积分，余额: {user.credits}")
+        logger.info(f"💰 [DEV] User #{user.id} mock topup {request.amount} credits, balance: {user.credits}")
         return TopupResponse(
             message=f"Successfully added {request.amount} credits",
             credits_added=request.amount,

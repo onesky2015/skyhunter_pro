@@ -2,7 +2,7 @@
 import logging
 import traceback
 import os
-import random
+from urllib.parse import urlparse
 from typing import Optional
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
@@ -10,11 +10,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request as StarletteRequest
-from starlette.responses import JSONResponse, RedirectResponse
+from starlette.responses import JSONResponse, RedirectResponse, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 from sqlmodel import Session, select
 
 from config import (
-    APP_VERSION, APP_DESCRIPTION, CORS_ALLOWED_ORIGINS, API_BASE_URL, SENTRY_DSN, logger
+    APP_VERSION, APP_DESCRIPTION, CORS_ALLOWED_ORIGINS, API_BASE_URL, SENTRY_DSN,
+    USE_MOCK_DATA, logger
 )
 
 if SENTRY_DSN:
@@ -188,23 +190,41 @@ async def lifespan(app: FastAPI):
     logger.info("✅ 调度器已关闭")
 
 
+_is_dev = USE_MOCK_DATA or os.getenv("DB_MODE", "").strip().lower() == "local"
+
 app = FastAPI(
     title="SkyHunter Pro API",
     description=APP_DESCRIPTION,
     version=APP_VERSION,
     lifespan=lifespan,
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
-    openapi_url="/api/openapi.json"
+    docs_url="/api/docs" if _is_dev else None,
+    redoc_url="/api/redoc" if _is_dev else None,
+    openapi_url="/api/openapi.json" if _is_dev else None,
 )
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: StarletteRequest, call_next):
+        response: Response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if not _is_dev:
+            response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
+            response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none'"
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"]
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-TOTP-Code", "X-Requested-With"],
+    expose_headers=["X-Requires-Verification", "X-Requires-TOTP"],
 )
 
 from core.middleware import ApiUsageLogMiddleware
@@ -226,14 +246,40 @@ async def root():
 
 @app.get("/api/v1/health", tags=["health"])
 async def health_check():
-    from config import USE_MOCK_DATA, DB_MODE, DB_MODE, SCHEDULER_INTERVAL_HOURS
-    from services.scheduler import _scheduler
-    scheduler_running = _scheduler is not None and _scheduler.running if _scheduler else False
-    return {
-        "status": "ok", "version": APP_VERSION,
-        "database": DB_MODE, "mock_mode": USE_MOCK_DATA,
-        "scheduler": {"running": scheduler_running, "interval_hours": SCHEDULER_INTERVAL_HOURS}
-    }
+    return {"status": "ok", "version": APP_VERSION}
+
+
+BOOKING_DOMAIN_ALLOWLIST = {
+    "google.com", "www.google.com", "google.co.jp", "google.co.uk",
+    "flights.google.com",
+    "skyscanner.com", "www.skyscanner.com", "skyscanner.net", "www.skyscanner.net",
+    "trip.com", "www.trip.com",
+    "booking.com", "www.booking.com",
+    "expedia.com", "www.expedia.com",
+    "kayak.com", "www.kayak.com",
+    "airasia.com", "www.airasia.com",
+    "ctrip.com", "www.ctrip.com",
+    "ly.com", "www.ly.com",
+    "qunar.com", "www.qunar.com",
+}
+
+
+def _is_safe_redirect(url: str) -> bool:
+    """校验重定向目标域名是否在白名单内"""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        host = (parsed.hostname or "").lower()
+        if host in BOOKING_DOMAIN_ALLOWLIST:
+            return True
+        for allowed in BOOKING_DOMAIN_ALLOWLIST:
+            if host.endswith("." + allowed):
+                return True
+        return False
+    except Exception:
+        return False
+
 
 @app.get("/api/v1/track/{monitor_id}", summary="预订链接点击追踪", tags=["track"])
 async def track_booking_click(monitor_id: int):
@@ -243,6 +289,9 @@ async def track_booking_click(monitor_id: int):
             raise HTTPException(status_code=404, detail="Task not found")
         if task.booking_link:
             link = task.booking_link
+            if not _is_safe_redirect(link):
+                logger.warning(f"Blocked redirect to untrusted domain: {link} (monitor_id={monitor_id})")
+                raise HTTPException(status_code=400, detail="Redirect target not allowed")
             task.click_count += 1
             task.last_clicked_at = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
             session.add(task)

@@ -71,8 +71,18 @@ try:
 except ImportError:
     logger = logging.getLogger("SkyHunter")
 
+def mask_email(email: str) -> str:
+    """脱敏邮箱地址：u***@gmail.com"""
+    if not email or "@" not in email:
+        return "***"
+    local, domain = email.rsplit("@", 1)
+    if len(local) <= 1:
+        return f"*@{domain}"
+    return f"{local[0]}***@{domain}"
+
+
 FORGOT_PASSWORD_WINDOW_SECONDS: int = 15 * 60
-FORGOT_PASSWORD_MAX_REQUESTS: int = 100
+FORGOT_PASSWORD_MAX_REQUESTS: int = 5
 RESET_PASSWORD_WINDOW_SECONDS: int = 15 * 60
 RESET_PASSWORD_MAX_ATTEMPTS: int = 5
 LOGIN_WINDOW_SECONDS: int = 15 * 60
@@ -108,6 +118,8 @@ EMAIL_VERIFY_MAX_ATTEMPTS: int = 5
 EMAIL_VERIFY_RESEND_WINDOW_SECONDS: int = 15 * 60
 EMAIL_VERIFY_RESEND_MAX: int = 10
 
+# NOTE: 内存限流存储 — 多 worker 不共享，重启后丢失。
+# 生产环境水平扩展时应迁移到 Redis，单实例部署 (workers=1) 下可用。
 _login_attempts: dict[str, list[float]] = {}
 _forgot_password_attempts: dict[str, list[float]] = {}
 _reset_password_attempts: dict[str, list[float]] = {}

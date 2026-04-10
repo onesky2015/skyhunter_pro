@@ -48,7 +48,8 @@
     },
     "plugins": [
       "expo-router",
-      "@sentry/react-native"
+      "@sentry/react-native",
+      "expo-secure-store"
     ],
     "extra": {
       "googleWebClientId": "511232230562-brr7d7tg5ceqmtcjq0h1aldnijso1l8p.apps.googleusercontent.com",

@@ -211,7 +211,6 @@ export const authApi = {
         const error = new Error(detail);
         (error as any).requiresTotp = true;
         (error as any).email = email;
-        (error as any).password = password;
         throw error;
       }
       throw new Error(detail);

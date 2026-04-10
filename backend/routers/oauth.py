@@ -1,4 +1,6 @@
 # filename: routers/oauth.py
+import os
+import time
 import secrets
 from fastapi import APIRouter, HTTPException, status
 from starlette.requests import Request as StarletteRequest
@@ -11,30 +13,33 @@ from models.database import User, utc_iso_now
 from schemas.api_models import OAuthAppleRequest, OAuthGoogleRequest, TokenResponse
 from core.security import issue_token_pair, hash_password
 from services.billing import _record_transaction
-from config import logger
+from config import logger, mask_email
 
 router = APIRouter()
 
-# Apple 公钥缓存
+APPLE_BUNDLE_ID = os.getenv("APPLE_BUNDLE_ID", "app.skyhunter.flight")
+
 _apple_keys_cache: dict | None = None
+_apple_keys_fetched_at: float = 0.0
+_APPLE_JWKS_TTL_SECONDS = 86400  # 24h
 
 
 def _get_apple_public_keys() -> dict:
-    """获取 Apple 的 JWKS 公钥集"""
-    global _apple_keys_cache
-    if _apple_keys_cache:
+    """获取 Apple 的 JWKS 公钥集（带 TTL 缓存）"""
+    global _apple_keys_cache, _apple_keys_fetched_at
+    now = time.time()
+    if _apple_keys_cache and (now - _apple_keys_fetched_at) < _APPLE_JWKS_TTL_SECONDS:
         return _apple_keys_cache
     resp = http_requests.get("https://appleid.apple.com/auth/keys", timeout=10)
     resp.raise_for_status()
     _apple_keys_cache = resp.json()
+    _apple_keys_fetched_at = now
     return _apple_keys_cache
 
 
 def _verify_apple_id_token(id_token: str) -> dict:
     """
-    验证 Apple ID Token 并返回 claims。
-    - 验证签名 (RS256, Apple JWKS)
-    - 验证 issuer = https://appleid.apple.com
+    验证 Apple ID Token：签名 (RS256)、issuer、audience (Bundle ID)。
     """
     try:
         header = jose_jwt.get_unverified_header(id_token)
@@ -49,8 +54,9 @@ def _verify_apple_id_token(id_token: str) -> dict:
             break
 
     if not key:
-        global _apple_keys_cache
+        global _apple_keys_cache, _apple_keys_fetched_at
         _apple_keys_cache = None
+        _apple_keys_fetched_at = 0.0
         jwks = _get_apple_public_keys()
         for k in jwks.get("keys", []):
             if k["kid"] == header.get("kid"):
@@ -67,29 +73,59 @@ def _verify_apple_id_token(id_token: str) -> dict:
             id_token,
             public_key,
             algorithms=["RS256"],
+            audience=APPLE_BUNDLE_ID,
             issuer="https://appleid.apple.com",
-            options={"verify_aud": False},
+            options={"verify_aud": True},
         )
         return claims
-    except JWTError as e:
-        raise HTTPException(status_code=400, detail=f"Apple token verification failed: {str(e)}")
+    except JWTError:
+        raise HTTPException(status_code=400, detail="Apple token verification failed")
+
+
+GOOGLE_CLIENT_IDS = [
+    os.getenv("GOOGLE_WEB_CLIENT_ID", "511232230562-brr7d7tg5ceqmtcjq0h1aldnijso1l8p.apps.googleusercontent.com"),
+    os.getenv("GOOGLE_IOS_CLIENT_ID", "511232230562-v3omoau22ch04bpesqjs60atkqri39mt.apps.googleusercontent.com"),
+    os.getenv("GOOGLE_ANDROID_CLIENT_ID", "511232230562-t7rt7ijcvir09cgs0uthgqlhh207tai3.apps.googleusercontent.com"),
+]
 
 
 def _verify_google_id_token(id_token: str) -> dict:
     """
-    验证 Google ID Token 并返回 claims。
-    使用 Google 的 tokeninfo 端点进行服务端验证。
+    验证 Google ID Token：本地签名验证 + audience 校验。
+    优先使用 google-auth 库，降级到 tokeninfo 端点。
     """
-    resp = http_requests.get(
-        f"https://oauth2.googleapis.com/tokeninfo?id_token={id_token}",
-        timeout=10,
-    )
-    if resp.status_code != 200:
-        raise HTTPException(status_code=400, detail="Invalid Google ID token")
+    try:
+        from google.oauth2 import id_token as google_id_token
+        from google.auth.transport import requests as google_requests
+        claims = google_id_token.verify_oauth2_token(
+            id_token,
+            google_requests.Request(),
+            clock_skew_in_seconds=10,
+        )
+        if claims.get("aud") not in GOOGLE_CLIENT_IDS:
+            raise HTTPException(status_code=400, detail="Google token audience mismatch")
+        if claims.get("iss") not in ("accounts.google.com", "https://accounts.google.com"):
+            raise HTTPException(status_code=400, detail="Google token issuer mismatch")
+    except ImportError:
+        logger.warning("google-auth library not installed, falling back to tokeninfo endpoint")
+        resp = http_requests.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": id_token},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=400, detail="Invalid Google ID token")
+        claims = resp.json()
+        if "error" in claims:
+            logger.warning(f"Google token validation error: {claims.get('error')}")
+            raise HTTPException(status_code=400, detail="Google token verification failed")
+        if claims.get("aud") not in GOOGLE_CLIENT_IDS:
+            raise HTTPException(status_code=400, detail="Google token audience mismatch")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Google token verification failed")
 
-    claims = resp.json()
-    if "error" in claims:
-        raise HTTPException(status_code=400, detail=f"Google token error: {claims['error']}")
     if "sub" not in claims or "email" not in claims:
         raise HTTPException(status_code=400, detail="Incomplete Google token claims")
 
@@ -155,10 +191,10 @@ def _oauth_login_or_create(
                 reference_type="signup",
                 reference_id=str(user.id),
             )
-            logger.info(f"🆕 OAuth 新用户: {email} via {provider} (ID: {user.id})")
+            logger.info(f"🆕 OAuth 新用户: {mask_email(email)} via {provider} (ID: {user.id})")
 
     tokens = issue_token_pair(user, ip_address=ip_address, user_agent=user_agent)
-    logger.info(f"🔐 OAuth 登录: {email} via {provider} (ID: {user.id})")
+    logger.info(f"🔐 OAuth 登录: {mask_email(email)} via {provider} (ID: {user.id})")
 
     return TokenResponse(
         access_token=tokens["access_token"],

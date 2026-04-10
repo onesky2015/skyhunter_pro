@@ -58,7 +58,7 @@ export default function LoginScreen() {
       router.replace(`/auth/verify-email?email=${encodeURIComponent(result.email || loginEmail)}`);
     } else if (result.requiresTotp) {
       setPendingEmail(result.email || loginEmail);
-      setPendingPassword(result.password || loginPassword);
+      setPendingPassword(loginPassword);
       setShowTotpModal(true);
     }
   };

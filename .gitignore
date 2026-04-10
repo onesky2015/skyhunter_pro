@@ -49,6 +49,9 @@ node_modules/
 .expo-shared/
 dist/
 web-build/
+# Next.js（构建输出，勿提交）
+.next/
+out/
 *.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*
@@ -107,6 +110,13 @@ temp/
 *.dSYM.zip
 android/app/build/
 ios/build/
+
+# -----------------------------------------------------------------------------
+# Google / Apple service account files
+# -----------------------------------------------------------------------------
+google-service-account.json
+GoogleService-Info.plist
+google-services.json
 
 # -----------------------------------------------------------------------------
 # Cursor / 本地计划（可选：若希望计划也纳入版本控制可删除此行）

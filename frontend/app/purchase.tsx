@@ -25,7 +25,6 @@ import {
 } from '../utils/iap';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../hooks/useAuth';
-import { API_URL } from '../constants/api';
 import { apiRequest } from '../services/api';
 import { useI18n } from '../i18n';
 import { useTheme, getShadowStyle } from '../theme';
@@ -121,7 +120,12 @@ export default function PurchaseScreen() {
 
   const fetchProducts = async () => {
     try {
-      const resp = await fetch(`${API_URL}/api/v1/payments/products`);
+      const resp = await apiRequest(
+        '/api/v1/payments/products',
+        {},
+        userToken,
+        handle401Error
+      );
       if (resp.ok) {
         setProducts(await resp.json());
       }
@@ -160,6 +164,15 @@ export default function PurchaseScreen() {
       }
       const data = await resp.json();
       if (data.checkout_url) {
+        const ALLOWED_CHECKOUT_HOSTS = ['checkout.stripe.com'];
+        try {
+          const url = new URL(data.checkout_url);
+          if (!ALLOWED_CHECKOUT_HOSTS.some(h => url.hostname === h || url.hostname.endsWith('.' + h))) {
+            throw new Error('Untrusted checkout URL');
+          }
+        } catch {
+          throw new Error('Invalid checkout URL received from server');
+        }
         await Linking.openURL(data.checkout_url);
       }
     } catch (err: any) {

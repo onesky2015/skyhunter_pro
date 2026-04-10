@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from starlette.requests import Request as StarletteRequest
 from sqlmodel import Session, select
 from datetime import datetime, date, timedelta
 from typing import List, Optional
@@ -73,8 +74,15 @@ def _airport_search_rank(airport: Airport, keyword: str, original_query: str, al
 async def search_airports(
     q: str = FastQuery(..., min_length=1, max_length=50, description="搜索关键词：IATA代码、城市名或机场名称"),
     limit: int = FastQuery(default=10, ge=1, le=30, description="返回结果数量上限"),
+    http_request: StarletteRequest = None,
 ):
     """根据 IATA 代码、城市名、机场名称或常见中文别名模糊搜索机场。"""
+    from core.rate_limit import check_ip_rate_limit
+    from core.middleware import _get_client_ip
+    client_ip = _get_client_ip(http_request) if http_request else "unknown"
+    retry_after = check_ip_rate_limit("/api/v1/airports/search", client_ip)
+    if retry_after:
+        raise HTTPException(status_code=429, detail=f"Too many requests. Retry after {retry_after}s.")
     normalized_query = normalize_airport_query(q)
     keyword = normalized_query.upper()
     if not keyword:
@@ -220,8 +228,8 @@ async def search_flights(request: SearchRequest, current_user: User = Depends(ge
             return_raw_data = [{"date": r["date"], "price": r["price"]} for r in return_range_results]
     except Exception as e:
         _refund_user_credits(current_user.id, search_cost, f"search_failed:{search_id}")
-        logger.error(f"❌ [{search_id}] 搜索异常: {e}")
-        raise HTTPException(status_code=500, detail=f"搜索服务不可用: {str(e)}")
+        logger.error(f"❌ [{search_id}] 搜索异常: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Search service temporarily unavailable. Please try again later.")
 
     heatmap_data = _classify_heatmap_levels(raw_data)
     valid_prices = [c.price for c in heatmap_data if c.price is not None]
@@ -344,8 +352,14 @@ POPULAR_ROUTES = [
 _popular_cache = {"data": None, "updated_at": None}
 
 @router.get("/api/v1/flights/popular", response_model=List[PopularFlight], summary="获取热门航班推荐", tags=["flights"])
-async def get_popular_flights():
+async def get_popular_flights(http_request: StarletteRequest = None):
     """获取热门航班路线及最优价格，强制1小时全局缓存。"""
+    from core.rate_limit import check_ip_rate_limit
+    from core.middleware import _get_client_ip
+    client_ip = _get_client_ip(http_request) if http_request else "unknown"
+    retry_after = check_ip_rate_limit("/api/v1/flights/popular", client_ip)
+    if retry_after:
+        raise HTTPException(status_code=429, detail=f"Too many requests. Retry after {retry_after}s.")
     now = datetime.utcnow()
     # 第一步：检查 1 小时内存缓存
     if _popular_cache["data"] and _popular_cache["updated_at"]:

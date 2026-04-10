@@ -81,7 +81,8 @@ async def verify_apple_iap(
     """
     import requests as http_requests
 
-    product = CREDIT_PRODUCTS.get(request.product_id)
+    products = get_credit_products()
+    product = products.get(request.product_id)
     if not product:
         raise HTTPException(status_code=400, detail=f"Unknown product: {request.product_id}")
 
@@ -168,7 +169,8 @@ async def verify_google_play(
     验证 Google Play Billing 购买并发放积分。
     使用 Google Play Developer API 验证购买 token。
     """
-    product = CREDIT_PRODUCTS.get(request.product_id)
+    products = get_credit_products()
+    product = products.get(request.product_id)
     if not product:
         raise HTTPException(status_code=400, detail=f"Unknown product: {request.product_id}")
 
@@ -242,8 +244,8 @@ async def verify_google_play(
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
-STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", "https://app.skyhunter.app/payment/success")
-STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", "https://app.skyhunter.app/payment/cancel")
+STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", "")
+STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", "")
 
 STRIPE_PRICE_MAP = {
     "credits_50": os.getenv("STRIPE_PRICE_CREDITS_50", ""),
@@ -277,6 +279,8 @@ async def create_stripe_checkout(
     """
     if not STRIPE_SECRET_KEY:
         raise HTTPException(status_code=503, detail="Stripe not configured")
+    if not STRIPE_SUCCESS_URL or not STRIPE_CANCEL_URL:
+        raise HTTPException(status_code=503, detail="Stripe redirect URLs not configured")
 
     products = get_credit_products()
     product = products.get(request.product_id)

@@ -10,7 +10,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      - DATABASE_URL=postgresql://skyhunter:skyhunter@db:5432/skyhunter
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-skyhunter}:${POSTGRES_PASSWORD:-skyhunter}@db:5432/${POSTGRES_DB:-skyhunter}
     depends_on:
       db:
         condition: service_healthy
@@ -21,15 +21,15 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: skyhunter
-      POSTGRES_USER: skyhunter
-      POSTGRES_PASSWORD: skyhunter
+      POSTGRES_DB: ${POSTGRES_DB:-skyhunter}
+      POSTGRES_USER: ${POSTGRES_USER:-skyhunter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-skyhunter}
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U skyhunter"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-skyhunter}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -43,6 +43,10 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
+      # 官网 /pricing 服务端拉取与 App 相同的商品列表（管理员面板保存的 credit_pricing_packages）
+      - SKYHUNTER_API_URL=http://backend:8000
+    depends_on:
+      - backend
     restart: unless-stopped
 
 volumes:

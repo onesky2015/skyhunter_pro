@@ -15,12 +15,10 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../hooks/useAuth';
-import { userApi, authApi } from '../../services/api';
+import { authApi } from '../../services/api';
 import { AdminPanel } from '../../components/AdminPanel';
 import { useI18n } from '../../i18n';
 import { useTheme, getShadowStyle } from '../../theme';
-
-const MAX_TOPUP = 5000;
 
 export default function ProfileScreen() {
   const { t, lang, setLang } = useI18n();
@@ -28,7 +26,6 @@ export default function ProfileScreen() {
   const styles = createStyles(theme);
   const router = useRouter();
   const { userInfo, userToken, logout, refreshUserInfo, handle401Error } = useAuth();
-  const [topupLoading, setTopupLoading] = useState(false);
   const [adminPanelVisible, setAdminPanelVisible] = useState(false);
   const [changePwdVisible, setChangePwdVisible] = useState(false);
   const [oldPassword, setOldPassword] = useState('');
@@ -38,42 +35,6 @@ export default function ProfileScreen() {
   const [deleteAccVisible, setDeleteAccVisible] = useState(false);
   const [deleteAccPassword, setDeleteAccPassword] = useState('');
   const [deleteAccLoading, setDeleteAccLoading] = useState(false);
-  const [topupModalVisible, setTopupModalVisible] = useState(false);
-  const [topupAmountDraft, setTopupAmountDraft] = useState('');
-
-  const handleTopup = async (amount: number = 50) => {
-    if (!userToken) return;
-    setTopupLoading(true);
-    try {
-      const data = await userApi.topup(userToken, amount, handle401Error);
-      Alert.alert(t('profile', 'topUpSuccess'), t('profile', 'topUpCreditsMsg').replace('{n}', String(data.credits_added)).replace('{total}', String(data.credits_total)));
-      await refreshUserInfo();
-      setTopupModalVisible(false);
-      setTopupAmountDraft('');
-    } catch (err: unknown) {
-      Alert.alert(t('profile', 'topUpFailed'), err instanceof Error ? err.message : t('profile', 'unknownError'));
-    } finally {
-      setTopupLoading(false);
-    }
-  };
-
-  const submitTopupFromModal = () => {
-    const raw = topupAmountDraft.trim().replace(/\s/g, '');
-    if (!raw) {
-      Alert.alert(t('common', 'error'), t('profile', 'topUpSelectOrEnter'));
-      return;
-    }
-    if (!/^\d+$/.test(raw)) {
-      Alert.alert(t('common', 'error'), t('profile', 'topUpInvalidAmount'));
-      return;
-    }
-    const amount = Number(raw);
-    if (!Number.isFinite(amount) || amount < 1 || amount > MAX_TOPUP) {
-      Alert.alert(t('common', 'error'), t('profile', 'topUpInvalidAmount'));
-      return;
-    }
-    void handleTopup(amount);
-  };
 
   const handleChangePassword = async () => {
     if (!newPassword || newPassword.length < 6) {
@@ -186,18 +147,10 @@ export default function ProfileScreen() {
         <Text style={styles.creditsSubtext}>{t('profile', 'creditsSubtext')}</Text>
 
         <TouchableOpacity
-          style={[styles.topupButton, topupLoading && styles.topupButtonDisabled]}
-          onPress={() => {
-            setTopupAmountDraft('');
-            setTopupModalVisible(true);
-          }}
-          disabled={topupLoading}
+          style={styles.topupButton}
+          onPress={() => router.push('/purchase')}
         >
-          {topupLoading ? (
-            <ActivityIndicator color="#000" />
-          ) : (
-            <Text style={styles.topupButtonText}>{t('profile', 'topUpOpen')}</Text>
-          )}
+          <Text style={styles.topupButtonText}>{t('purchase', 'buy') || t('profile', 'topUpOpen')}</Text>
         </TouchableOpacity>
       </View>
 
@@ -254,72 +207,6 @@ export default function ProfileScreen() {
           <Text style={styles.actionButtonText}>🗑️ {t('profile', 'deleteAccount').toUpperCase()}</Text>
         </TouchableOpacity>
       </View>
-
-      {/* Mock 充值：选额 / 自定义（上限 MAX_TOPUP），完整支付见 /purchase */}
-      <Modal visible={topupModalVisible} transparent animationType="fade">
-        <KeyboardAvoidingView
-          style={styles.modalOverlay}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>{t('profile', 'topUpModalTitle')}</Text>
-            <Text style={styles.topupHint}>
-              {t('profile', 'topUpHint').replace('{n}', String(MAX_TOPUP))}
-            </Text>
-            <View style={styles.topupPresetRow}>
-              <TouchableOpacity
-                style={styles.topupPresetBtn}
-                onPress={() => setTopupAmountDraft('100')}
-              >
-                <Text style={styles.topupPresetText}>{t('profile', 'topUpPreset100')}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.topupPresetBtn}
-                onPress={() => setTopupAmountDraft('500')}
-              >
-                <Text style={styles.topupPresetText}>{t('profile', 'topUpPreset500')}</Text>
-              </TouchableOpacity>
-            </View>
-            <TextInput
-              style={styles.modalInput}
-              placeholder={t('profile', 'topUpCustomPlaceholder')}
-              placeholderTextColor="#666"
-              keyboardType="number-pad"
-              value={topupAmountDraft}
-              onChangeText={setTopupAmountDraft}
-            />
-            <TouchableOpacity
-              style={[styles.topupButton, { marginBottom: 12 }, topupLoading && styles.topupButtonDisabled]}
-              onPress={submitTopupFromModal}
-              disabled={topupLoading}
-            >
-              {topupLoading ? (
-                <ActivityIndicator color={theme.colors.accentText} />
-              ) : (
-                <Text style={styles.topupButtonText}>{t('profile', 'topUpConfirm')}</Text>
-              )}
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.actionButton, styles.changePwdButton]}
-              onPress={() => {
-                setTopupModalVisible(false);
-                router.push('/purchase');
-              }}
-            >
-              <Text style={styles.actionButtonText}>{t('profile', 'topUpOpenPurchase')}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.cancelTopupBtn}
-              onPress={() => {
-                setTopupModalVisible(false);
-                setTopupAmountDraft('');
-              }}
-            >
-              <Text style={styles.cancelTopupText}>{t('common', 'cancel')}</Text>
-            </TouchableOpacity>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
 
       {/* Change Password Modal */}
       <Modal visible={changePwdVisible} transparent animationType="slide">
@@ -604,40 +491,5 @@ const createStyles = (theme: ReturnType<typeof useTheme>['theme']) =>
       fontSize: 13,
       marginBottom: 16,
       textAlign: 'center',
-    },
-    topupHint: {
-      color: theme.colors.textMuted,
-      fontSize: 12,
-      textAlign: 'center',
-      marginBottom: 16,
-      lineHeight: 18,
-    },
-    topupPresetRow: {
-      flexDirection: 'row',
-      gap: 12,
-      marginBottom: 12,
-    },
-    topupPresetBtn: {
-      flex: 1,
-      backgroundColor: theme.colors.surfaceMuted,
-      paddingVertical: 12,
-      borderRadius: theme.radius.sm,
-      borderWidth: 1,
-      borderColor: theme.colors.borderStrong,
-      alignItems: 'center',
-    },
-    topupPresetText: {
-      color: theme.colors.accent,
-      fontSize: 15,
-      fontWeight: '700',
-    },
-    cancelTopupBtn: {
-      paddingVertical: 12,
-      alignItems: 'center',
-      marginTop: 4,
-    },
-    cancelTopupText: {
-      color: theme.colors.textMuted,
-      fontSize: 14,
     },
   });

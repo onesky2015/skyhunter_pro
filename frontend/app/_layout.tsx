@@ -3,6 +3,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useI18n } from '../i18n';
 import { ThemeProvider, useTheme, getStatusBarStyle } from '../theme';
+import { AuthProvider } from '../hooks/useAuth';
 import { initSentry, wrapSentry } from '../utils/sentry';
 
 initSentry();
@@ -33,6 +34,8 @@ function RootNavigator() {
         <Stack.Screen name="settings" />
         <Stack.Screen name="legal" />
         <Stack.Screen name="purchase" />
+        <Stack.Screen name="payment/success" />
+        <Stack.Screen name="payment/cancel" />
       </Stack>
     </>
   );
@@ -41,7 +44,9 @@ function RootNavigator() {
 function RootLayout() {
   return (
     <ThemeProvider>
-      <RootNavigator />
+      <AuthProvider>
+        <RootNavigator />
+      </AuthProvider>
     </ThemeProvider>
   );
 }

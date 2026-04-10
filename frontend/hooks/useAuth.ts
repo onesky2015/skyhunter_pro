@@ -1,5 +1,4 @@
-// filename: hooks/useAuth.ts
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useContext, createContext, useMemo } from 'react';
 import { Alert } from 'react-native';
 import { storage } from '../services/storage';
 import { TOKEN_KEY, REFRESH_TOKEN_KEY, USER_KEY } from '../constants/api';
@@ -17,10 +16,26 @@ export interface LoginReturn {
   requiresVerification?: boolean;
   requiresTotp?: boolean;
   email?: string;
-  password?: string;
 }
 
-export const useAuth = () => {
+interface AuthContextValue {
+  userToken: string | null;
+  userInfo: UserInfo | null;
+  loading: boolean;
+  isAuthenticated: boolean;
+  login: (email: string, password: string, totpCode?: string) => Promise<LoginReturn>;
+  signup: (email: string, password: string, fullName?: string) => Promise<SignupReturn>;
+  verifyEmail: (email: string, code: string) => Promise<boolean>;
+  resendVerification: (email: string) => Promise<boolean>;
+  oauthLogin: (provider: 'apple' | 'google', idToken: string, fullName?: string) => Promise<boolean>;
+  logout: () => Promise<void>;
+  refreshUserInfo: () => Promise<void>;
+  handle401Error: () => Promise<void>;
+}
+
+const AuthContext = createContext<AuthContextValue | null>(null);
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [userToken, setUserToken] = useState<string | null>(null);
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -67,7 +82,7 @@ export const useAuth = () => {
         return { success: false, requiresVerification: true, email: (err as any).email };
       }
       if (err instanceof Error && (err as any).requiresTotp) {
-        return { success: false, requiresTotp: true, email: (err as any).email, password: (err as any).password };
+        return { success: false, requiresTotp: true, email: (err as any).email };
       }
       Alert.alert('Login Failed', err instanceof Error ? err.message : 'Unknown error');
       return { success: false };
@@ -151,7 +166,7 @@ export const useAuth = () => {
     }
   }, [userToken, handle401Error]);
 
-  return {
+  const value = useMemo<AuthContextValue>(() => ({
     userToken,
     userInfo,
     loading,
@@ -164,6 +179,19 @@ export const useAuth = () => {
     logout,
     refreshUserInfo,
     handle401Error,
-  };
-};
+  }), [
+    userToken, userInfo, loading,
+    login, signup, verifyEmail, resendVerification,
+    oauthLogin, logout, refreshUserInfo, handle401Error,
+  ]);
 
+  return React.createElement(AuthContext.Provider, { value }, children);
+}
+
+export const useAuth = (): AuthContextValue => {
+  const ctx = useContext(AuthContext);
+  if (!ctx) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return ctx;
+};

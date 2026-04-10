@@ -20,6 +20,7 @@ import { AnalyticsTab } from './admin/AnalyticsTab';
 import { CostsTab } from './admin/CostsTab';
 import { SecurityTab } from './admin/SecurityTab';
 import { ConfigsTab } from './admin/ConfigsTab';
+import { CreditPricingTab } from './admin/CreditPricingTab';
 
 interface AdminPanelProps {
   visible: boolean;
@@ -28,7 +29,16 @@ interface AdminPanelProps {
   on401: () => void;
 }
 
-type TabKey = 'dashboard' | 'users' | 'monitors' | 'airports' | 'analytics' | 'costs' | 'configs' | 'security';
+type TabKey =
+  | 'dashboard'
+  | 'users'
+  | 'monitors'
+  | 'airports'
+  | 'analytics'
+  | 'costs'
+  | 'pricing'
+  | 'configs'
+  | 'security';
 
 const AIRPORT_TYPE_OPTIONS = [
   'large_airport',
@@ -547,6 +557,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 { key: 'airports', label: t('admin', 'airports') },
                 { key: 'analytics', label: t('admin', 'analytics') },
                 { key: 'costs', label: t('admin', 'costs') },
+                { key: 'pricing', label: t('admin', 'pricing') },
                 { key: 'configs', label: t('admin', 'configs') },
                 { key: 'security', label: t('admin', 'security') },
               ] as { key: TabKey; label: string }[]).map((tab) => (
@@ -563,7 +574,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </View>
           </ScrollView>
 
-          {loading && !['dashboard', 'airports', 'analytics', 'costs', 'configs', 'security'].includes(activeTab) ? (
+          {loading && !['dashboard', 'airports', 'analytics', 'costs', 'pricing', 'configs', 'security'].includes(activeTab) ? (
             <View style={styles.center}>
               <ActivityIndicator size="large" color="#00FF00" />
             </View>
@@ -734,6 +745,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
               {activeTab === 'costs' && (
                 <CostsTab userToken={userToken} on401={on401} />
+              )}
+
+              {activeTab === 'pricing' && (
+                <CreditPricingTab userToken={userToken} on401={on401} />
               )}
 
               {activeTab === 'configs' && (
